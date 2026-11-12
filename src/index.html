@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' vkd: https: data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'; connect-src 'self'" />
+    <title>VK Doll Community</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-logo" id="brand-logo"></div>
+          <div>
+            <div class="brand-name">Doll Community</div>
+            <div class="brand-sub">кукольная мастерская</div>
+          </div>
+        </div>
+        <nav id="nav"></nav>
+        <div class="nav-sep"></div>
+        <button class="nav-item" id="help-btn" title="Обучение: как пользоваться программой"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8 1c0 1.7-2.4 2.2-2.4 3.7M12 17.2v.3"/></svg><span>Обучение</span></button>
+        <div class="side-status" id="side-status"></div>
+      </aside>
+      <main class="main">
+        <section class="view" id="view-library"></section>
+        <section class="view" id="view-stats"></section>
+        <section class="view" id="view-users"></section>
+        <section class="view" id="view-sources"></section>
+        <section class="view" id="view-trash"></section>
+        <section class="view" id="view-settings"></section>
+      </main>
+    </div>
+    <div id="sync-dock"></div>
+    <div class="toasts" id="toasts"></div>
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,70 @@
+{
+  "name": "vk-doll-community",
+  "productName": "VK Doll Community",
+  "version": "1.0.0",
+  "description": "Локальная библиотека кукольных публикаций ВКонтакте и активности участников",
+  "main": "desktop/main.js",
+  "author": "VK Doll Community",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "demo": "node test/make-demo.js",
+    "test": "node test/run-tests.js",
+    "icon": "electron desktop/build-icon.js",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "@fontsource-variable/nunito": "^5.3.0",
+    "electron": "^45.3.1",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "local.vkdollcommunity.app",
+    "productName": "VK Doll Community",
+    "copyright": "Copyright (c) 2026",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "desktop/main.js",
+      "desktop/preload.js",
+      "desktop/storage.js",
+      "desktop/vk.js",
+      "desktop/sync.js",
+      "desktop/model.js",
+      "src/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "executableName": "VKDollCommunity"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "VK Doll Community",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh",
+      "artifactName": "VKDollCommunity-Setup-${version}.exe",
+      "installerLanguages": [
+        "ru_RU"
+      ],
+      "language": "1049"
+    }
+  }
+}
