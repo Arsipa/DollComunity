@@ -54,10 +54,10 @@ function renderBanners() {
   const b = $('#lib-banners');
   const parts = [];
   if (S.blocked.length) {
-    parts.push(`<div class="notice red banner">${icon('alert')}<div>Файл данных повреждён (${esc(S.blocked.join(', '))}) и не был восстановлен автоматически. Изменения в нём временно не сохраняются, чтобы ничего не потерять. Откройте <b>Настройки → Резервные копии</b> и восстановите последнюю копию.</div></div>`);
+    parts.push(`<div class="notice red banner">${icon('alert')}<div>Файл данных повреждён (${esc(S.blocked.join(', '))}) и не был восстановлен автоматически. Изменения в нём временно не сохраняются, чтобы ничего не потерять. Повреждённый файл не тронут — откройте <b>Настройки → Открыть папку</b> и сообщите о проблеме.</div></div>`);
   }
   const fixed = S.problems.filter((p) => p.fixed);
-  if (fixed.length) parts.push(`<div class="notice amber banner">${icon('shield')}<div>При запуске найден повреждённый файл — данные автоматически восстановлены из ${fixed[0].fixed === 'prev' ? 'предыдущей сохранённой версии' : 'резервной копии'}. Повреждённый файл отложен в папку trash.</div></div>`);
+  if (fixed.length) parts.push(`<div class="notice amber banner">${icon('shield')}<div>При запуске найден повреждённый файл — данные автоматически восстановлены из предыдущей сохранённой версии. Повреждённый файл отложен в папку trash.</div></div>`);
   const conflicts = S.posts.filter((p) => vkChanged(p).length).length;
   if (conflicts) parts.push(`<div class="notice lav banner">${icon('compare')}<div>Во ВКонтакте изменился оригинал у отредактированных вами публикаций: ${num(conflicts)}. Ваши версии сохранены — можно сравнить и выбрать. <a href="#" id="show-conflicts">Показать</a></div></div>`);
   b.innerHTML = parts.join('');

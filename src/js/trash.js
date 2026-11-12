@@ -43,7 +43,7 @@ export function renderTrash() {
       }
     });
     row.querySelector('[data-forget]')?.addEventListener('click', async () => {
-      const ok = await confirmDialog({ title: 'Удалить навсегда?', text: 'Содержимое карточки (ваши правки, история, список лайков) будет удалено. Публикация не появится снова при обновлении. Перед удалением создаётся резервная копия.', ok: 'Удалить навсегда', danger: true });
+      const ok = await confirmDialog({ title: 'Удалить навсегда?', text: 'Содержимое карточки (ваши правки, история, список лайков) будет удалено. Публикация не появится снова при обновлении.', ok: 'Удалить навсегда', danger: true });
       if (!ok) return;
       await window.api.forgetPosts([id]);
       await reload();

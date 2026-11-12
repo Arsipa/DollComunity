@@ -234,6 +234,7 @@ function createWindow() {
       writeConfig(config);
     } catch (_) {}
   });
+  attachEditMenu(win.webContents);
   if (process.env.VKD_DEVTOOLS) win.webContents.openDevTools({ mode: 'detach' });
   if (DEV_TEST && process.env.VKD_SHOTS) runScreenshots(process.env.VKD_SHOTS);
 }
@@ -252,7 +253,25 @@ function runScreenshots(dir) {
     for (const [i, step] of steps.entries()) {
       const cut = step.indexOf('::');
       const [name, js] = cut < 0 ? [step, ''] : [step.slice(0, cut), step.slice(cut + 2)];
-      if (js) {
+      if (name.startsWith('@paste') || name.startsWith('@ctxpaste')) {
+        const { clipboard } = require('electron');
+        let saved = '';
+        try {
+          saved = clipboard.readText();
+          clipboard.writeText(js);
+          if (name.startsWith('@paste')) {
+            win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'V', modifiers: ['control'] });
+            win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'V', modifiers: ['control'] });
+          } else win.webContents.paste(); // то же, что «Вставить» в меню правой кнопки
+        } catch (e) {
+          log('error', `paste step: ${e.stack}`);
+        }
+        await wait(300);
+        try {
+          if (saved) clipboard.writeText(saved);
+          else clipboard.clear();
+        } catch (_) {}
+      } else if (js) {
         try {
           await win.webContents.executeJavaScript(js);
         } catch (e) {
@@ -264,6 +283,38 @@ function runScreenshots(dir) {
       fs.writeFileSync(path.join(dir, `${String(i).padStart(2, '0')}_${name.trim()}.png`), img.toPNG());
     }
     app.quit();
+  });
+}
+
+/**
+ * Меню по правой кнопке мыши для полей ввода и выделенного текста («Вставить» и т.п.)
+ * и привычные сочетания Ctrl+C / Ctrl+V / Ctrl+X / Ctrl+A / Ctrl+Z.
+ * Главное меню окна скрыто, поэтому сочетания обрабатываются здесь явно.
+ */
+function attachEditMenu(wc) {
+  wc.on('context-menu', (_e, p) => {
+    const items = [];
+    if (p.isEditable) {
+      items.push(
+        { label: 'Вырезать', role: 'cut', enabled: p.editFlags.canCut },
+        { label: 'Копировать', role: 'copy', enabled: p.editFlags.canCopy },
+        { label: 'Вставить', role: 'paste', enabled: p.editFlags.canPaste },
+        { type: 'separator' },
+        { label: 'Выделить всё', role: 'selectAll' },
+      );
+    } else if (p.selectionText && p.selectionText.trim()) {
+      items.push({ label: 'Копировать', role: 'copy' });
+    }
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: BrowserWindow.fromWebContents(wc) });
+  });
+  wc.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    // физическая клавиша, чтобы сочетания работали и в русской раскладке
+    const map = { KeyV: 'paste', KeyC: 'copy', KeyX: 'cut', KeyA: 'selectAll', KeyZ: input.shift ? 'redo' : 'undo', KeyY: 'redo' };
+    const action = map[input.code];
+    if (!action) return;
+    e.preventDefault();
+    wc[action]();
   });
 }
 
@@ -284,12 +335,6 @@ function openLibrary() {
   store = new Store(root, log);
   problems = store.loadAll();
   log('info', `Библиотека открыта: ${root}`);
-  // ежедневная автокопия при запуске
-  const s = store.get('settings.json');
-  const last = store.listBackupsSync()[0];
-  if (s.backups.auto && (!last || !last.created || Date.now() - Date.parse(last.created) > 20 * 3600 * 1000)) {
-    store.createBackup({ reason: 'Ежедневная копия', keep: s.backups.keep }).catch((e) => log('error', 'backup: ' + e.message));
-  }
 }
 
 const posts = () => store.get('posts.json').posts;
@@ -359,6 +404,7 @@ function vkIdLoginWindow({ clientId, redirectUri, scope }) {
         finish(e);
       }
     });
+    attachEditMenu(w.webContents);
     w.webContents.setWindowOpenHandler(() => ({ action: 'allow', overrideBrowserWindowOptions: { parent: w, autoHideMenuBar: true, webPreferences: { partition: part, sandbox: true } } }));
     w.webContents.on('did-navigate', (_e, u) => log('info', `VK ID: ${u.split('?')[0]}`));
     w.on('closed', () => finish(new vkid.VkIdError('Окно входа закрыто.', 'cancelled')));
@@ -471,7 +517,6 @@ function registerIpc() {
   });
   h('trash:forget', async (ids) => {
     // «Удалить навсегда»: запись остаётся в списке удалённых (чтобы синхронизация её не вернула), но без содержимого
-    await store.createBackup({ reason: 'Перед очисткой корзины', keep: store.get('settings.json').backups.keep });
     const del = store.get('deleted_posts.json');
     for (const d of del.deleted) {
       if (ids.includes(d.id) && d.post) {
@@ -540,7 +585,7 @@ function registerIpc() {
   // ---- настройки ----
   h('settings:update', (patch) => {
     const s = store.get('settings.json');
-    for (const k of ['sync', 'view', 'backups', 'vk']) {
+    for (const k of ['sync', 'view', 'vk']) {
       if (patch[k] && typeof patch[k] === 'object') Object.assign(s[k], patch[k]);
     }
     if (typeof patch.onboarding_done === 'boolean') s.onboarding_done = patch.onboarding_done;
@@ -631,18 +676,7 @@ function registerIpc() {
     return true;
   });
 
-  // ---- резервные копии и хранилище ----
-  h('backup:list', () => store.listBackupsSync());
-  h('backup:create', () => store.createBackup({ reason: 'Создана вручную', kind: 'manual', withPhotos: true, keep: store.get('settings.json').backups.keep }));
-  h('backup:restore', async (name) => {
-    if (engine && engine.running) throw new Error('Дождитесь окончания обновления данных');
-    await store.restoreBackup(name, store.get('settings.json').backups.keep);
-    problems = [];
-    send('data:changed', {});
-    return true;
-  });
-  h('backup:delete', (name) => store.deleteBackup(name));
-  h('backup:reveal', (name) => shell.openPath(path.join(store.backupsDir, name)));
+  // ---- хранилище ----
   h('lib:open-folder', () => shell.openPath(store.root));
   h('lib:usage', () => store.usage());
   h('lib:integrity', () => store.integrity());

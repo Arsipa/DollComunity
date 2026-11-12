@@ -1,14 +1,14 @@
-// Настройки: ВКонтакте, хранение, резервные копии, журнал, о программе.
+// Настройки: ВКонтакте, хранение, журнал, о программе.
 import { S, reload } from './state.js';
 import { startTour } from './tour.js';
-import { icon, esc, $, $$, html, num, pl, fmtMs, bytes, toast, toastError, confirmDialog, modal } from './util.js';
+import { icon, esc, $, $$, bytes, toast, toastError, confirmDialog, modal } from './util.js';
 
 export function renderSettings() {
   const el = $('#view-settings');
   const s = S.settings;
   const acc = S.account;
   el.innerHTML = `
-    <div class="view-head"><div><h1 class="view-title">Настройки</h1><div class="view-sub">Подключение, хранение данных и резервные копии</div></div></div>
+    <div class="view-head"><div><h1 class="view-title">Настройки</h1><div class="view-sub">Подключение ВКонтакте и хранение данных</div></div></div>
     <div class="settings-grid">
       <div class="col">
         <div class="panel" id="p-vk">
@@ -46,24 +46,14 @@ export function renderSettings() {
             </details>`
           }
         </div>
+      </div>
+      <div class="col">
         <div class="panel">
           <div class="panel-title">${icon('folder')} Хранение данных</div>
           <p class="panel-sub">Вся библиотека — обычная папка на вашем компьютере. Чтобы перенести её на другой компьютер, просто скопируйте эту папку.</p>
           <dl class="kv"><dt>Папка</dt><dd>${esc(S.paths.root)}</dd><dt>Занято</dt><dd id="usage">считаю…</dd></dl>
           <div class="row" style="margin-top:14px"><button class="btn" id="open-folder">${icon('folder')} Открыть папку</button><button class="btn ghost" id="change-folder">Изменить расположение</button><button class="btn ghost" id="integrity">${icon('shield')} Проверить файлы</button></div>
           <div id="integrity-res"></div>
-        </div>
-      </div>
-      <div class="col">
-        <div class="panel" id="p-backups">
-          <div class="panel-title">${icon('shield')} Резервные копии</div>
-          <p class="panel-sub">Копии создаются автоматически раз в день и перед каждым обновлением данных.</p>
-          <label class="check"><input type="checkbox" id="bk-auto" ${s.backups.auto ? 'checked' : ''} /><span>Автоматические резервные копии</span></label>
-          <div class="row" style="margin:4px 0 12px"><span class="label">Хранить последних:</span>
-            <select class="select" id="bk-keep">${[5, 10, 20, 40].map((n) => `<option value="${n}" ${s.backups.keep === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
-          </div>
-          <div class="row"><button class="btn primary" id="bk-create">${icon('plus')} Создать копию сейчас</button></div>
-          <div id="bk-list" style="margin-top:10px"></div>
         </div>
         <div class="panel">
           <div class="panel-title">${icon('info')} О программе</div>
@@ -123,7 +113,7 @@ export function renderSettings() {
   // ---- хранение ----
   window.api.usage().then((u) => {
     const el2 = $('#usage');
-    if (el2) el2.textContent = `${bytes(u.total)} (фото ${bytes(u.photos)}, аватары ${bytes(u.avatars)}, данные ${bytes(u.data)}, копии ${bytes(u.backups)})`;
+    if (el2) el2.textContent = `${bytes(u.total)} (фото ${bytes(u.photos)}, аватары ${bytes(u.avatars)}, данные ${bytes(u.data)})`;
   });
   $('#open-folder').onclick = () => window.api.openFolder();
   $('#change-folder').onclick = async () => {
@@ -142,26 +132,9 @@ export function renderSettings() {
     const r = await window.api.integrity();
     const bad = r.filter((x) => !x.ok);
     $('#integrity-res').innerHTML = bad.length
-      ? `<div class="notice red" style="margin-top:12px">${icon('alert')}<div>Повреждены: ${bad.map((x) => esc(x.name)).join(', ')}. Восстановите данные из резервной копии.</div></div>`
+      ? `<div class="notice red" style="margin-top:12px">${icon('alert')}<div>Повреждены: ${bad.map((x) => esc(x.name)).join(', ')}. Откройте папку с данными: рядом с повреждённым файлом лежит его предыдущая версия (.prev).</div></div>`
       : `<div class="notice mint" style="margin-top:12px">${icon('check')}<div>Все файлы в порядке: ${r.map((x) => `${esc(x.name)} (${bytes(x.size)})`).join(', ')}</div></div>`;
   };
-
-  // ---- копии ----
-  $('#bk-auto').onchange = (e) => window.api.updateSettings({ backups: { auto: e.target.checked } }).then((st) => (S.settings = st));
-  $('#bk-keep').onchange = (e) => window.api.updateSettings({ backups: { keep: Number(e.target.value) } }).then((st) => (S.settings = st));
-  $('#bk-create').onclick = async (e) => {
-    e.currentTarget.disabled = true;
-    try {
-      await window.api.createBackup();
-      toast('Резервная копия создана');
-      drawBackups();
-    } catch (err) {
-      toastError(err);
-    } finally {
-      e.currentTarget.disabled = false;
-    }
-  };
-  drawBackups();
 
   $('#show-log').onclick = async () => {
     const txt = await window.api.readLogs();
@@ -171,44 +144,4 @@ export function renderSettings() {
     lb.scrollTop = lb.scrollHeight;
   };
   $('#restart-tour').onclick = () => startTour();
-}
-
-const KIND = { manual: 'Вручную (с фото)', auto: 'Автоматически', safety: 'Страховочная' };
-async function drawBackups() {
-  const box = $('#bk-list');
-  if (!box) return;
-  const list = await window.api.listBackups();
-  if (!list.length) return (box.innerHTML = '<div class="list-empty">Копий пока нет</div>');
-  box.innerHTML = list
-    .map(
-      (b) => `<div class="backup-row" data-name="${esc(b.name)}">
-      <div class="info"><div style="font-weight:800">${fmtMs(b.created ? Date.parse(b.created) : 0)}</div>
-      <div class="muted small">${esc(b.reason)} · ${KIND[b.kind] || b.kind}${b.posts !== null ? ` · ${pl(b.posts, 'публикация', 'публикации', 'публикаций')}` : ''}</div></div>
-      <button class="btn sm" data-restore>${icon('restore')} Восстановить</button>
-      <button class="btn ghost icon-only sm" data-reveal title="Открыть папку">${icon('folder')}</button>
-      <button class="btn ghost icon-only sm danger" data-del title="Удалить копию">${icon('trash')}</button>
-    </div>`,
-    )
-    .join('');
-  $$('.backup-row', box).forEach((row) => {
-    const name = row.dataset.name;
-    row.querySelector('[data-restore]').onclick = async () => {
-      const ok = await confirmDialog({ title: 'Восстановить данные из копии?', text: 'Библиотека вернётся к состоянию на момент копии. Перед этим текущее состояние будет сохранено отдельной страховочной копией, так что ничего не потеряется.', ok: 'Восстановить' });
-      if (!ok) return;
-      try {
-        await window.api.restoreBackup(name);
-        await reload();
-        toast('Данные восстановлены');
-      } catch (e) {
-        toastError(e);
-      }
-    };
-    row.querySelector('[data-reveal]').onclick = () => window.api.revealBackup(name);
-    row.querySelector('[data-del]').onclick = async () => {
-      const ok = await confirmDialog({ title: 'Удалить резервную копию?', text: 'Эту копию нельзя будет вернуть.', ok: 'Удалить', danger: true });
-      if (!ok) return;
-      await window.api.deleteBackup(name);
-      drawBackups();
-    };
-  });
 }

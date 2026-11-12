@@ -9,7 +9,6 @@
  *   <root>/data/deleted_posts.json  — локальная корзина
  *   <root>/storage/photos/          — фотографии публикаций (+ thumbs/ — уменьшенные копии)
  *   <root>/storage/avatars/         — аватары
- *   <root>/backups/                 — резервные копии
  *   <root>/trash/                   — файлы, убранные из библиотеки (заменённые фото, повреждённые JSON)
  *   <root>/logs/                    — журнал
  *
@@ -59,7 +58,6 @@ function defaultDoc(name) {
         sources: [],
         sync: { max_posts: 200, since_days: 0, refresh_all_likes: false, save_avatars: true, all_photos: true },
         view: { sort: 'date_desc' },
-        backups: { auto: true, keep: 10 },
         onboarding_done: false,
       };
     case 'sync_history.json':
@@ -122,6 +120,10 @@ function migrate(name, data) {
         }
       }
     }
+  }
+  if (name === 'settings.json' && 'backups' in d) {
+    delete d.backups; // резервные копии убраны из программы
+    changed = true;
   }
   if (name === 'sync_history.json' && !Array.isArray(d.snapshots)) {
     d.snapshots = [];
@@ -211,13 +213,12 @@ class Store {
     this.photosDir = path.join(this.root, 'storage', 'photos');
     this.thumbsDir = path.join(this.photosDir, 'thumbs');
     this.avatarsDir = path.join(this.root, 'storage', 'avatars');
-    this.backupsDir = path.join(this.root, 'backups');
     this.trashDir = path.join(this.root, 'trash');
     this.logsDir = path.join(this.root, 'logs');
   }
 
   ensureDirs() {
-    for (const d of [this.dataDir, this.photosDir, this.thumbsDir, this.avatarsDir, this.backupsDir, this.trashDir, this.logsDir]) {
+    for (const d of [this.dataDir, this.photosDir, this.thumbsDir, this.avatarsDir, this.trashDir, this.logsDir]) {
       fs.mkdirSync(d, { recursive: true });
     }
   }
@@ -255,17 +256,7 @@ class Store {
             this.log('warn', `${name}: восстановлен из предыдущей версии`);
           }
         } catch (_) {}
-        // 2) последняя резервная копия
-        if (!data) {
-          const fromBackup = this.findDocInBackups(name);
-          if (fromBackup) {
-            this.quarantine(file);
-            data = fromBackup.data;
-            problems.push({ name, fixed: 'backup', backup: fromBackup.backup });
-            this.log('warn', `${name}: восстановлен из копии ${fromBackup.backup}`);
-          }
-        }
-        // 3) не получилось — НЕ перезаписываем, блокируем запись
+        // 2) не получилось — НЕ перезаписываем, блокируем запись
         if (!data) {
           data = defaultDoc(name);
           this.blocked.set(name, e.message);
@@ -286,16 +277,6 @@ class Store {
       fs.mkdirSync(this.trashDir, { recursive: true });
       fs.copyFileSync(file, path.join(this.trashDir, `${stamp()}_damaged_${path.basename(file)}`));
     } catch (_) {}
-  }
-
-  findDocInBackups(name) {
-    for (const b of this.listBackupsSync()) {
-      try {
-        const d = readJson(path.join(this.backupsDir, b.name, 'data', name));
-        if (validateDoc(name, d)) return { data: d, backup: b.name };
-      } catch (_) {}
-    }
-    return null;
   }
 
   get(name) {
@@ -334,120 +315,6 @@ class Store {
     }
   }
 
-  // ---------- резервные копии ----------
-
-  listBackupsSync() {
-    let entries = [];
-    try {
-      entries = fs.readdirSync(this.backupsDir, { withFileTypes: true }).filter((e) => e.isDirectory());
-    } catch (_) {
-      return [];
-    }
-    const list = [];
-    for (const e of entries) {
-      let manifest = {};
-      try {
-        manifest = readJson(path.join(this.backupsDir, e.name, 'manifest.json'));
-      } catch (_) {}
-      list.push({
-        name: e.name,
-        created: manifest.created || null,
-        reason: manifest.reason || 'auto',
-        kind: manifest.kind || 'auto',
-        posts: manifest.posts ?? null,
-        users: manifest.users ?? null,
-        withPhotos: !!manifest.withPhotos,
-      });
-    }
-    list.sort((a, b) => (b.created || b.name).localeCompare(a.created || a.name));
-    return list;
-  }
-
-  /**
-   * Резервная копия. Автоматические копии содержат только данные (JSON) — фотографии хранятся
-   * под неизменяемыми именами и не удаляются. Ручная копия включает фото (через жёсткие ссылки — мгновенно).
-   */
-  async createBackup({ reason = 'auto', kind = 'auto', withPhotos = false, keep = 10 } = {}) {
-    this.flush();
-    const name = `${stamp()}_${kind}`;
-    const dir = path.join(this.backupsDir, name);
-    await fsp.mkdir(path.join(dir, 'data'), { recursive: true });
-    for (const doc of DOCS) {
-      const src = path.join(this.dataDir, doc);
-      if (fs.existsSync(src) && !this.blocked.has(doc)) await fsp.copyFile(src, path.join(dir, 'data', doc));
-    }
-    if (withPhotos) {
-      for (const sub of ['photos', 'avatars']) {
-        const from = path.join(this.root, 'storage', sub);
-        const to = path.join(dir, 'storage', sub);
-        await fsp.mkdir(to, { recursive: true });
-        for (const f of await fsp.readdir(from).catch(() => [])) {
-          const src = path.join(from, f);
-          const st = await fsp.stat(src).catch(() => null);
-          if (!st || !st.isFile()) continue;
-          try {
-            await fsp.link(src, path.join(to, f));
-          } catch (_) {
-            await fsp.copyFile(src, path.join(to, f));
-          }
-        }
-      }
-    }
-    const manifest = {
-      created: new Date().toISOString(),
-      reason,
-      kind,
-      withPhotos,
-      posts: (this.docs['posts.json']?.posts || []).length,
-      users: Object.keys(this.docs['users.json']?.users || {}).length,
-      schema: SCHEMA_VERSION,
-    };
-    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
-    await this.pruneBackups(keep);
-    this.log('info', `Создана резервная копия ${name} (${reason})`);
-    return name;
-  }
-
-  async pruneBackups(keep) {
-    // ручные копии не удаляются автоматически
-    const auto = this.listBackupsSync().filter((b) => b.kind !== 'manual');
-    for (const b of auto.slice(Math.max(1, keep))) {
-      await fsp.rm(path.join(this.backupsDir, b.name), { recursive: true, force: true });
-    }
-  }
-
-  async deleteBackup(name) {
-    await fsp.rm(safeJoin(this.backupsDir, name), { recursive: true, force: true });
-  }
-
-  /** Восстановление: сначала копия текущего состояния, затем замена документов. */
-  async restoreBackup(name, keep) {
-    const dir = safeJoin(this.backupsDir, name);
-    const docs = {};
-    for (const doc of DOCS) {
-      const f = path.join(dir, 'data', doc);
-      if (!fs.existsSync(f)) continue;
-      const d = readJson(f);
-      if (!validateDoc(doc, d)) throw new StoreError('backup_damaged', doc);
-      docs[doc] = d;
-    }
-    if (!docs['posts.json']) throw new StoreError('backup_damaged', 'posts.json');
-    this.blocked.clear();
-    await this.createBackup({ reason: 'Перед восстановлением', kind: 'safety', keep: keep + 2 });
-    for (const [doc, d] of Object.entries(docs)) {
-      this.docs[doc] = migrate(doc, d).data;
-      this.writeNow(doc);
-    }
-    for (const sub of ['photos', 'avatars']) {
-      const from = path.join(dir, 'storage', sub);
-      const to = path.join(this.root, 'storage', sub);
-      for (const f of await fsp.readdir(from).catch(() => [])) {
-        if (!fs.existsSync(path.join(to, f))) await fsp.copyFile(path.join(from, f), path.join(to, f)).catch(() => {});
-      }
-    }
-    this.log('info', `Данные восстановлены из копии ${name}`);
-  }
-
   integrity() {
     const report = [];
     for (const name of DOCS) {
@@ -468,7 +335,6 @@ class Store {
       data: await dirSize(this.dataDir),
       photos: await dirSize(this.photosDir),
       avatars: await dirSize(this.avatarsDir),
-      backups: await dirSize(this.backupsDir),
       total: await dirSize(this.root),
     };
   }

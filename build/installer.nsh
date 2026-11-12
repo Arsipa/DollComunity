@@ -19,7 +19,7 @@
 ; При обновлении поверх старой версии вопрос не задаётся и данные не трогаются.
 !macro customUnInstall
   ${ifNot} ${isUpdated}
-    MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "Удалить также вашу библиотеку (публикации, фотографии, резервные копии)?$\r$\n$\r$\nЕсли нажать «Нет», библиотека останется в папке$\r$\n$APPDATA\VK Doll Community$\r$\nи откроется снова после повторной установки." /SD IDNO IDYES vkd_delete_data IDNO vkd_keep_data
+    MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 "Удалить также вашу библиотеку (публикации и фотографии)?$\r$\n$\r$\nЕсли нажать «Нет», библиотека останется в папке$\r$\n$APPDATA\VK Doll Community$\r$\nи откроется снова после повторной установки." /SD IDNO IDYES vkd_delete_data IDNO vkd_keep_data
     vkd_delete_data:
       RMDir /r "$APPDATA\VK Doll Community"
       RMDir /r "$LOCALAPPDATA\VK Doll Community"

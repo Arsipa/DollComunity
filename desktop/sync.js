@@ -1,7 +1,7 @@
 'use strict';
 /**
  * Синхронизация с VK.
- *  1. Интернет → 2. Авторизация → 3. Резервная копия → 4. Новые публикации источников →
+ *  1. Интернет → 2. Авторизация → 3. Новые публикации источников →
  *  5. Проверка остальных публикаций библиотеки → 6. Лайки → 7. Профили → 8. Фото → 9. Аватары → 10. Отчёт.
  * Данные сохраняются по ходу работы (контрольные точки), поэтому прерывание ничего не ломает.
  */
@@ -128,10 +128,6 @@ class SyncEngine extends EventEmitter {
       if (!(await VkClient.online())) throw new VkError('network', 'Нет подключения к интернету. Ранее загруженные публикации доступны как обычно.');
       await vk.call('users.get', { user_ids: 1 }); // проверка ключа доступа
 
-      if (settings.backups.auto) {
-        this.phase('backup', 'Создаю резервную копию');
-        await store.createBackup({ reason: 'Перед обновлением', keep: settings.backups.keep });
-      }
 
       for (const p of postsDoc.posts) p.is_new = false;
 

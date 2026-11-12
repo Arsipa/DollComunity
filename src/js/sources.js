@@ -19,8 +19,8 @@ export function renderSources() {
           <p class="panel-sub">Откройте нужное сообщество или страницу во ВКонтакте, скопируйте адрес из строки браузера и вставьте сюда.</p>
           ${S.account.connected ? '' : `<div class="notice amber" style="margin-bottom:12px">${icon('key')}<div>Сначала подключите ВКонтакте. <a href="#" id="to-settings">Перейти в настройки</a></div></div>`}
           <div class="add-source">
-            <input class="input" id="src-input" placeholder="Например: https://vk.com/doll_fashion" ${S.account.connected ? '' : 'disabled'} />
-            <button class="btn primary" id="src-find" ${S.account.connected ? '' : 'disabled'}>${icon('search')} Найти</button>
+            <input class="input" id="src-input" placeholder="Например: https://vk.com/doll_fashion" autocomplete="off" spellcheck="false" />
+            <button class="btn primary" id="src-find">${icon('search')} Найти</button>
           </div>
           <div id="src-preview"></div>
         </div>
@@ -71,7 +71,11 @@ export function renderSources() {
   $('#to-settings')?.addEventListener('click', (e) => (e.preventDefault(), go('settings')));
   const find = async () => {
     const v = $('#src-input').value.trim();
-    if (!v) return;
+    if (!v) {
+      $('#src-preview').innerHTML = `<div class="notice lav" style="margin-top:12px">${icon('info')}<div>Вставьте ссылку на сообщество или страницу ВКонтакте: щёлкните правой кнопкой мыши по полю → «Вставить» или нажмите Ctrl+V.</div></div>`;
+      $('#src-input').focus();
+      return;
+    }
     const btn = $('#src-find');
     btn.disabled = true;
     btn.innerHTML = `${icon('refresh', 'spin')} Ищу…`;

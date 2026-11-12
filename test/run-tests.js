@@ -126,18 +126,6 @@ function makeEngine(store) {
     assert.strictEqual(fs.readFileSync(file, 'utf8'), 'garbage');
   });
 
-  await test('резервная копия и восстановление', async () => {
-    const s = makeStore('backup');
-    s.get('posts.json').posts.push({ id: 'keep-me' });
-    s.writeNow('posts.json');
-    const name = await s.createBackup({ reason: 't', kind: 'manual' });
-    s.get('posts.json').posts.length = 0;
-    s.writeNow('posts.json');
-    await s.restoreBackup(name, 10);
-    assert.strictEqual(s.get('posts.json').posts[0].id, 'keep-me');
-    assert.ok(s.listBackupsSync().some((b) => b.kind === 'safety'), 'перед восстановлением создана страховочная копия');
-  });
-
   await test('модель: правка, приоритет ручных изменений, принять оригинал', () => {
     const p = M.newPost({ ownerId: -1, id: 5, text: 'Новое платье для кукол', date: 100, photos: [{ key: 'a' }], now: 1 });
     M.editPost(p, { text: 'Моё новое платье для Барби' }, 2);

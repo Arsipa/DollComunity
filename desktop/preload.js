@@ -52,11 +52,6 @@ contextBridge.exposeInMainWorld('api', {
   onSyncDone: on('sync:done'),
   onDataChanged: on('data:changed'),
 
-  listBackups: call('backup:list'),
-  createBackup: call('backup:create'),
-  restoreBackup: call('backup:restore'),
-  deleteBackup: call('backup:delete'),
-  revealBackup: call('backup:reveal'),
   openFolder: call('lib:open-folder'),
   usage: call('lib:usage'),
   integrity: call('lib:integrity'),
