@@ -1,6 +1,6 @@
-// Библиотека публикаций: карточки, поиск, фильтры, подсказка с лайками.
-import { S, eff, photos, text, date, localChanges, vkChanged, sourceName, likersOf, reload } from './state.js';
-import { icon, esc, $, $$, html, num, pl, fmtDate, photoSrc, placeholder, avatar, userName, debounce, incremental, toast, toastError, confirmDialog, ago } from './util.js';
+// «Мои посты»: карточки постов, добавленных по ссылке; поиск, сортировка, подсказка с лайками.
+import { S, eff, photos, text, date, localChanges, ownerName, likersOf, reload } from './state.js';
+import { icon, esc, $, $$, html, num, pl, fmtDate, photoSrc, placeholder, avatar, userName, debounce, incremental, toast, toastError, confirmDialog, ago, modal } from './util.js';
 import { openPost, openEditor } from './post.js';
 import { openLikers, openUser } from './people.js';
 import { startSync, go } from './app.js';
@@ -8,14 +8,8 @@ import { startSync, go } from './app.js';
 const F = {
   q: '',
   qMode: 'text', // text | liker
-  source: '',
-  from: '',
-  to: '',
+  month: '', // 'ГГГГ-ММ' или '' — все месяцы
   sort: 'date_desc',
-  changed: false,
-  fresh: false,
-  withPhoto: false,
-  missing: false,
 };
 let stopIncremental = null;
 const root = () => $('#view-library');
@@ -23,15 +17,15 @@ const root = () => $('#view-library');
 export function renderLibrary() {
   const el = root();
   F.sort = S.settings?.view?.sort || F.sort;
-  const hasSources = (S.settings?.sources || []).length > 0;
   const lastSync = S.history.last_sync;
   el.innerHTML = `
     <div class="view-head">
       <div>
-        <h1 class="view-title">Библиотека</h1>
-        <div class="view-sub">${S.posts.length ? `${pl(S.posts.length, 'публикация', 'публикации', 'публикаций')} · обновлено ${ago(lastSync)}` : 'Здесь появятся публикации из ваших источников'}</div>
+        <h1 class="view-title">Мои посты</h1>
+        <div class="view-sub">${S.posts.length ? `${pl(S.posts.length, 'пост', 'поста', 'постов')} · обновлено ${ago(lastSync)}` : 'Добавляйте свои посты ВКонтакте по ссылке'}</div>
       </div>
       <div class="spacer"></div>
+      <button class="btn lg" id="lib-add">${icon('plus')}<span>Добавить пост</span></button>
       <button class="btn primary lg sync-btn" id="lib-sync" ${S.syncing ? 'disabled' : ''}>${icon('refresh', S.syncing ? 'spin' : '')}<span>${S.syncing ? 'Обновляю…' : 'Обновить данные'}</span></button>
     </div>
     <div id="lib-banners"></div>
@@ -39,11 +33,12 @@ export function renderLibrary() {
     <div class="grid" id="lib-grid"></div>
     <div id="lib-empty"></div>`;
   $('#lib-sync').onclick = () => startSync();
+  $('#lib-add').onclick = () => openAddPost();
   renderBanners();
   if (!S.posts.length) {
-    $('#lib-empty').innerHTML = emptyState(hasSources);
+    $('#lib-empty').innerHTML = emptyState();
     $('#lib-empty [data-go]')?.addEventListener('click', (e) => go(e.currentTarget.dataset.go));
-    $('#lib-empty [data-sync]')?.addEventListener('click', () => startSync());
+    $('#lib-empty [data-add]')?.addEventListener('click', () => openAddPost());
     return;
   }
   bindToolbar();
@@ -58,38 +53,100 @@ function renderBanners() {
   }
   const fixed = S.problems.filter((p) => p.fixed);
   if (fixed.length) parts.push(`<div class="notice amber banner">${icon('shield')}<div>При запуске найден повреждённый файл — данные автоматически восстановлены из предыдущей сохранённой версии. Повреждённый файл отложен в папку trash.</div></div>`);
-  const conflicts = S.posts.filter((p) => vkChanged(p).length).length;
-  if (conflicts) parts.push(`<div class="notice lav banner">${icon('compare')}<div>Во ВКонтакте изменился оригинал у отредактированных вами публикаций: ${num(conflicts)}. Ваши версии сохранены — можно сравнить и выбрать. <a href="#" id="show-conflicts">Показать</a></div></div>`);
   b.innerHTML = parts.join('');
-  $('#show-conflicts')?.addEventListener('click', (e) => {
-    e.preventDefault();
-    F.changed = true;
-    renderLibrary();
-  });
 }
 
-function emptyState(hasSources) {
+function emptyState() {
   if (!S.account.connected)
-    return `<div class="empty"><div class="art">${icon('bow')}</div><h3>Добро пожаловать!</h3><p>Здесь будет ваша коллекция кукольных публикаций из ВКонтакте: фото нарядов, тексты и все, кто поставил «Мне нравится».</p><p class="muted small">Для начала подключите ВКонтакте — это займёт минуту.</p><button class="btn primary lg" data-go="settings">${icon('key')} Подключить ВКонтакте</button></div>`;
-  if (!hasSources)
-    return `<div class="empty"><div class="art">${icon('sources')}</div><h3>Добавьте источник</h3><p>Укажите ссылку на сообщество или страницу ВКонтакте, публикации которых хотите собирать.</p><button class="btn primary lg" data-go="sources">${icon('plus')} Добавить источник</button></div>`;
-  return `<div class="empty"><div class="art">${icon('sparkle')}</div><h3>Почти готово!</h3><p>Нажмите «Обновить данные», и приложение загрузит публикации, фотографии и лайки. Это может занять несколько минут.</p><button class="btn primary lg" data-sync>${icon('refresh')} Обновить данные</button></div>`;
+    return `<div class="empty"><div class="art">${icon('bow')}</div><h3>Добро пожаловать!</h3><p>Здесь будут ваши посты из ВКонтакте: фото, тексты и все, кто поставил «Мне нравится».</p><p class="muted small">Для начала подключите ВКонтакте — это займёт минуту.</p><button class="btn primary lg" data-go="settings">${icon('key')} Подключить ВКонтакте</button></div>`;
+  return `<div class="empty"><div class="art">${icon('sparkle')}</div><h3>Добавьте первый пост</h3><p>Откройте свой пост во ВКонтакте, скопируйте ссылку на него и вставьте сюда. Программа загрузит фото, текст и лайки только этого поста.</p><button class="btn primary lg" data-add>${icon('plus')} Добавить пост</button></div>`;
+}
+
+// ---------- добавление поста ----------
+export function openAddPost() {
+  const m = modal({
+    title: 'Добавить пост',
+    body: `${S.account.connected ? '' : `<div class="notice amber" style="margin-bottom:12px">${icon('key')}<div>Сначала подключите ВКонтакте. <a href="#" id="ap-settings">Перейти в настройки</a></div></div>`}
+      <div class="field"><label>Ссылка на пост</label>
+        <input class="input" id="ap-url" placeholder="Например: https://vk.com/wall-123456_789" autocomplete="off" spellcheck="false" />
+        <span class="hint">Откройте пост во ВКонтакте и скопируйте адрес из строки браузера — в нём есть «wall». Подойдёт и ссылка вида …?w=wall-123_456.</span>
+      </div>
+      <div class="field"><label>Название поста <span class="muted">(необязательно)</span></label>
+        <input class="input" id="ap-title" placeholder="Например: Платье для Паолы, весна" maxlength="200" autocomplete="off" />
+        <span class="hint">Видно только вам — помогает быстро найти пост среди карточек.</span>
+      </div>
+      <div id="ap-res"></div>`,
+    foot: `<button class="btn ghost" data-close>Отмена</button><button class="btn primary" id="ap-ok">${icon('plus')} Добавить</button>`,
+  });
+  const url = m.el.querySelector('#ap-url');
+  const ttl = m.el.querySelector('#ap-title');
+  const ok = m.el.querySelector('#ap-ok');
+  const res = m.el.querySelector('#ap-res');
+  m.el.querySelector('#ap-settings')?.addEventListener('click', (e) => (e.preventDefault(), m.close(), go('settings')));
+  setTimeout(() => url.focus(), 30);
+  const submit = async () => {
+    const v = url.value.trim();
+    if (!v) {
+      res.innerHTML = `<div class="notice lav">${icon('info')}<div>Вставьте ссылку на пост: щёлкните правой кнопкой мыши по полю → «Вставить» или нажмите Ctrl+V.</div></div>`;
+      url.focus();
+      return;
+    }
+    ok.disabled = true;
+    ok.innerHTML = `${icon('refresh', 'spin')} Загружаю…`;
+    try {
+      const p = await window.api.addPost(v, ttl.value);
+      m.close();
+      await reload();
+      toast(`Пост добавлен${p.title ? `: ${p.title}` : ''}. Загружаю фото и лайки…`);
+      startSync({ postIds: [p.id] });
+    } catch (e) {
+      res.innerHTML = `<div class="notice red">${icon('alert')}<div>${esc(e.message)}</div></div>`;
+      ok.disabled = false;
+      ok.innerHTML = `${icon('plus')} Добавить`;
+    }
+  };
+  ok.onclick = submit;
+  // не «onkeydown = (e) => e.key === 'Enter' && submit()» — false из on*-обработчика отменяет ввод
+  for (const inp of [url, ttl]) {
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+  }
+}
+
+const MONTHS_NOM = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+const monthKey = (sec) => {
+  const d = new Date(sec * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+/** Месяцы, в которых есть посты: [{ key, label, n }] от новых к старым */
+function monthList() {
+  const m = new Map();
+  for (const p of S.posts) {
+    const k = monthKey(date(p));
+    m.set(k, (m.get(k) || 0) + 1);
+  }
+  return [...m.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+    .map(([key, n]) => {
+      const [y, mm] = key.split('-');
+      return { key, n, label: `${MONTHS_NOM[Number(mm) - 1]} ${y}` };
+    });
 }
 
 function toolbar() {
-  const sources = S.settings.sources;
-  const ownerIds = [...new Set(S.posts.map((p) => p.source_id || '')).values()];
+  const months = monthList();
+  if (F.month && !months.some((m) => m.key === F.month)) F.month = '';
   return `
   <div class="toolbar">
-    <div class="search">${icon('search')}<input class="input" id="f-q" placeholder="${F.qMode === 'text' ? 'Поиск по тексту публикаций…' : 'Имя того, кто поставил лайк…'}" value="${esc(F.q)}" /></div>
+    <div class="search">${icon('search')}<input class="input" id="f-q" placeholder="${F.qMode === 'text' ? 'Поиск по названию и тексту…' : 'Имя того, кто поставил лайк…'}" value="${esc(F.q)}" /></div>
     <select class="select" id="f-qmode" title="Где искать">
       <option value="text" ${F.qMode === 'text' ? 'selected' : ''}>в тексте</option>
       <option value="liker" ${F.qMode === 'liker' ? 'selected' : ''}>по лайкнувшим</option>
     </select>
-    <select class="select" id="f-source">
-      <option value="">Все источники</option>
-      ${sources.map((s) => `<option value="${esc(s.id)}" ${F.source === s.id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}
-      ${ownerIds.some((id) => id && !S.sourcesById.has(id)) || ownerIds.includes('') ? `<option value="__none" ${F.source === '__none' ? 'selected' : ''}>Без источника</option>` : ''}
+    <select class="select" id="f-month" title="Месяц публикации">
+      <option value="">Все месяцы · ${num(S.posts.length)}</option>
+      ${months.map((m) => `<option value="${m.key}" ${F.month === m.key ? 'selected' : ''}>${m.label} · ${num(m.n)}</option>`).join('')}
     </select>
     <select class="select" id="f-sort">
       <option value="date_desc">Сначала новые</option>
@@ -99,15 +156,7 @@ function toolbar() {
       <option value="added_desc">Недавно добавленные</option>
     </select>
   </div>
-  <div class="chips">
-    <button class="chip ${F.fresh ? 'on' : ''}" data-chip="fresh">${icon('sparkle')} Новые</button>
-    <button class="chip ${F.changed ? 'on' : ''}" data-chip="changed">${icon('edit')} С моими изменениями</button>
-    <button class="chip ${F.withPhoto ? 'on' : ''}" data-chip="withPhoto">${icon('image')} Только с фото</button>
-    <button class="chip ${F.missing ? 'on' : ''}" data-chip="missing">${icon('alert')} Нет в VK</button>
-    <span class="chip" style="cursor:default;padding-right:6px">${icon('calendar')} с <input type="date" id="f-from" value="${F.from}" style="border:0;background:none;outline:none;font-weight:700;color:var(--ink-2)"/> по <input type="date" id="f-to" value="${F.to}" style="border:0;background:none;outline:none;font-weight:700;color:var(--ink-2)"/></span>
-    <button class="btn ghost sm" id="f-reset">Сбросить</button>
-    <span class="result-line" id="f-count"></span>
-  </div>`;
+`;
 }
 
 function bindToolbar() {
@@ -115,28 +164,14 @@ function bindToolbar() {
   $('#f-q').addEventListener('input', debounce((e) => ((F.q = e.target.value), renderGrid()), 180));
   $('#f-qmode').onchange = (e) => {
     F.qMode = e.target.value;
-    $('#f-q').placeholder = F.qMode === 'text' ? 'Поиск по тексту публикаций…' : 'Имя того, кто поставил лайк…';
+    $('#f-q').placeholder = F.qMode === 'text' ? 'Поиск по названию и тексту…' : 'Имя того, кто поставил лайк…';
     renderGrid();
   };
-  $('#f-source').onchange = (e) => ((F.source = e.target.value), renderGrid());
+  $('#f-month').onchange = (e) => ((F.month = e.target.value), renderGrid());
   $('#f-sort').onchange = (e) => {
     F.sort = e.target.value;
     window.api.updateSettings({ view: { sort: F.sort } }).catch(() => {});
     renderGrid();
-  };
-  $('#f-from').onchange = (e) => ((F.from = e.target.value), renderGrid());
-  $('#f-to').onchange = (e) => ((F.to = e.target.value), renderGrid());
-  $$('[data-chip]').forEach(
-    (b) =>
-      (b.onclick = () => {
-        F[b.dataset.chip] = !F[b.dataset.chip];
-        b.classList.toggle('on', F[b.dataset.chip]);
-        renderGrid();
-      }),
-  );
-  $('#f-reset').onclick = () => {
-    Object.assign(F, { q: '', qMode: 'text', source: '', from: '', to: '', changed: false, fresh: false, withPhoto: false, missing: false });
-    renderLibrary();
   };
 }
 
@@ -144,26 +179,13 @@ function filtered() {
   let list = S.posts;
   const q = F.q.trim().toLowerCase();
   if (q) {
-    if (F.qMode === 'text') list = list.filter((p) => text(p).toLowerCase().includes(q));
+    if (F.qMode === 'text') list = list.filter((p) => (p.title || '').toLowerCase().includes(q) || text(p).toLowerCase().includes(q));
     else {
       const uids = new Set(Object.values(S.users).filter((u) => userName(u).toLowerCase().includes(q)).map((u) => String(u.id)));
       list = list.filter((p) => likersOf(p).some((id) => uids.has(id)));
     }
   }
-  if (F.source === '__none') list = list.filter((p) => !p.source_id || !S.sourcesById.has(p.source_id));
-  else if (F.source) list = list.filter((p) => p.source_id === F.source);
-  if (F.from) {
-    const t = new Date(F.from + 'T00:00:00').getTime() / 1000;
-    list = list.filter((p) => date(p) >= t);
-  }
-  if (F.to) {
-    const t = new Date(F.to + 'T23:59:59').getTime() / 1000;
-    list = list.filter((p) => date(p) <= t);
-  }
-  if (F.changed) list = list.filter((p) => localChanges(p).length || vkChanged(p).length);
-  if (F.fresh) list = list.filter((p) => p.is_new);
-  if (F.withPhoto) list = list.filter((p) => photos(p).length);
-  if (F.missing) list = list.filter((p) => p.vk_missing);
+  if (F.month) list = list.filter((p) => monthKey(date(p)) === F.month);
   const sorters = {
     date_desc: (a, b) => date(b) - date(a),
     date_asc: (a, b) => date(a) - date(b),
@@ -180,47 +202,86 @@ export function renderGrid() {
   if (stopIncremental) stopIncremental();
   grid.innerHTML = '';
   const list = filtered();
-  const cnt = $('#f-count');
-  if (cnt) cnt.textContent = list.length === S.posts.length ? `Всего: ${num(list.length)}` : `Найдено: ${num(list.length)} из ${num(S.posts.length)}`;
   if (!list.length) {
-    grid.innerHTML = `<div class="list-empty" style="grid-column:1/-1">${icon('search')}<br>Ничего не найдено. Попробуйте изменить условия поиска.</div>`;
+    grid.innerHTML = `<div class="list-empty" style="grid-column:1/-1">${icon('search')}<br>${F.month ? 'В этом месяце ничего не найдено.' : 'Ничего не найдено. Попробуйте изменить условия поиска.'}</div>`;
     return;
   }
   stopIncremental = incremental(grid, list, card, { batch: 48, root: root() });
+}
+
+const SRC_TONES = ['lav', 'blue', 'mint', 'amber', 'pink'];
+export const ownerUrl = (p) => (p.owner_id < 0 ? `https://vk.com/club${-p.owner_id}` : `https://vk.com/id${p.owner_id}`);
+/** Плашка источника: у каждого сообщества/страницы свой цвет, чтобы посты разных источников различались с первого взгляда */
+export function sourceChip(p) {
+  const name = ownerName(p);
+  const tone = SRC_TONES[Math.abs(Number(p.owner_id) || 0) % SRC_TONES.length];
+  return `<button class="src-chip ${tone}" data-src title="${esc(name)} — открыть во ВКонтакте"><span class="src-ava">${esc((name.replace(/[^\p{L}\p{N}]/gu, '')[0] || '?').toUpperCase())}</span><span class="src-name">${esc(name)}</span>${icon(p.owner_id < 0 ? 'users' : 'external')}</button>`;
 }
 
 function card(p) {
   const ph = photos(p);
   const t = text(p);
   const changed = localChanges(p).length > 0;
-  const vkc = vkChanged(p).length > 0;
   const el = html(`<article class="card" data-id="${esc(p.id)}">
     <div class="card-photo" data-open>
-      ${ph[0] ? `<img src="${esc(photoSrc(ph[0]))}" alt="" loading="lazy" decoding="async" data-ph="Фото недоступно" />` : placeholder()}
+      ${
+        ph.length > 1
+          ? `<div class="slides">${ph.map((x) => `<img src="${esc(photoSrc(x))}" alt="" loading="lazy" decoding="async" data-ph="Фото недоступно" />`).join('')}</div>
+             <button class="s-nav prev" data-s="-1" title="Предыдущее фото">${icon('chevL')}</button><button class="s-nav next" data-s="1" title="Следующее фото">${icon('chevR')}</button>
+             <div class="s-dots">${ph.map((_, i) => `<span class="${i ? '' : 'on'}"></span>`).join('')}</div>`
+          : ph[0]
+            ? `<img src="${esc(photoSrc(ph[0]))}" alt="" loading="lazy" decoding="async" data-ph="Фото недоступно" />`
+            : placeholder()
+      }
       <div class="card-badges">
         ${p.is_new ? `<span class="badge mint">${icon('sparkle')} Новое</span>` : ''}
-        ${vkc ? `<span class="badge lav" title="Публикация изменилась в ВКонтакте, а у вас своя версия">${icon('compare')} Изменено в VK</span>` : changed ? `<span class="badge pink" title="Есть локальные изменения">${icon('edit')} Изменено вручную</span>` : ''}
-        ${p.vk_missing ? `<span class="badge amber" title="Публикация не найдена в ВКонтакте (удалена или скрыта). В библиотеке она сохранена.">${icon('alert')} Нет в VK</span>` : ''}
+        ${changed ? `<span class="badge pink" title="Есть ваши изменения">${icon('edit')} Изменено</span>` : ''}
+        ${p.vk_missing ? `<span class="badge amber" title="Пост не найден во ВКонтакте (удалён или скрыт). У вас он сохранён.">${icon('alert')} Нет в VK</span>` : ''}
       </div>
-      ${ph.length > 1 ? `<span class="photo-count">${icon('image')} ${ph.length}</span>` : ''}
+      <div class="card-acts">
+        <button class="c-act" data-orig title="Открыть во ВКонтакте">${icon('external')}</button>
+        <button class="c-act" data-edit title="Редактировать">${icon('edit')}</button>
+        <button class="c-act danger" data-del title="Убрать в корзину">${icon('trash')}</button>
+      </div>
+      ${ph.length > 1 ? `<span class="photo-count">${icon('image')}<b data-n>1</b>/${ph.length}</span>` : ''}
     </div>
     <div class="card-body">
-      <div class="card-meta">${icon('calendar')}<span class="nowrap">${fmtDate(date(p))}</span><span>·</span><span class="src" title="${esc(sourceName(p))}">${esc(sourceName(p))}</span></div>
-      <p class="card-text ${t ? '' : 'empty'}">${t ? esc(t.length > 600 ? t.slice(0, 600) + '…' : t) : 'Без текста'}</p>
-      ${t.length > 160 || t.split('\n').length > 4 ? '<button class="more-link" data-open>Читать полностью</button>' : ''}
+      ${sourceChip(p)}
+      ${p.title ? `<h3 class="card-title" title="${esc(p.title)}">${esc(p.title)}</h3>` : ''}
+      <p class="card-text ${t ? '' : 'empty'} ${p.title ? '' : 'long'}">${t ? esc(t.length > 600 ? t.slice(0, 600) + '…' : t) : 'Без текста'}</p>
+      ${t.length > 140 || t.split('\n').length > 3 ? '<button class="more-link" data-open>Читать полностью</button>' : ''}
     </div>
     <div class="card-foot">
       <button class="likes-pill" data-likes title="Кто поставил «Мне нравится»">${icon('heartFill', 'fill')} ${num(p.likes_count)}</button>
       <div class="spacer"></div>
-      <button class="btn ghost icon-only sm act" data-orig title="Открыть оригинал ВКонтакте">${icon('external')}</button>
-      <button class="btn ghost icon-only sm act" data-edit title="Редактировать">${icon('edit')}</button>
-      <button class="btn ghost icon-only sm act" data-del title="Удалить из библиотеки">${icon('trash')}</button>
+      <span class="card-date" title="${esc(fmtDate(date(p), true))}">${icon('calendar')}${esc(fmtDate(date(p)))}</span>
     </div>
   </article>`);
-  el.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openPost(p.id)));
-  el.querySelector('[data-orig]').onclick = () => window.api.openUrl(p.url);
-  el.querySelector('[data-edit]').onclick = () => openEditor(p.id);
-  el.querySelector('[data-del]').onclick = () => deletePost(p.id);
+  // слайдер фото: стрелки листают, клик по фото открывает пост на текущем фото
+  let slide = 0;
+  const slideBy = (d) => {
+    slide = (slide + d + ph.length) % ph.length;
+    el.querySelector('.slides').style.transform = `translateX(-${slide * 100}%)`;
+    el.querySelectorAll('.s-dots span').forEach((x, i) => x.classList.toggle('on', i === slide));
+    const n = el.querySelector('[data-n]');
+    if (n) n.textContent = String(slide + 1);
+  };
+  el.querySelectorAll('[data-s]').forEach(
+    (b) =>
+      (b.onclick = (e) => {
+        e.stopPropagation();
+        slideBy(Number(b.dataset.s));
+      }),
+  );
+  el.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openPost(p.id, slide)));
+  const stop = (fn) => (e) => {
+    e.stopPropagation();
+    fn();
+  };
+  el.querySelector('[data-orig]').onclick = stop(() => window.api.openUrl(p.url));
+  el.querySelector('[data-edit]').onclick = stop(() => openEditor(p.id));
+  el.querySelector('[data-del]').onclick = stop(() => deletePost(p.id));
+  el.querySelector('[data-src]').onclick = () => window.api.openUrl(ownerUrl(p));
   const lk = el.querySelector('[data-likes]');
   lk.onclick = () => {
     hidePopover();
@@ -285,7 +346,7 @@ export async function deletePost(id, after) {
   if (!p) return;
   const ok = await confirmDialog({
     title: 'Удалить карточку?',
-    text: 'Карточка переместится в корзину библиотеки. Публикация во ВКонтакте <b>не будет</b> удалена, и при обновлении данных эта карточка не появится снова. Вернуть её можно из корзины.',
+    text: 'Карточка переместится в корзину. Пост во ВКонтакте <b>не будет</b> удалён. Вернуть карточку можно из корзины.',
     ok: 'Удалить',
     danger: true,
   });

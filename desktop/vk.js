@@ -24,6 +24,8 @@ function classify(err) {
   if (c === 1 || c === 10) return new VkError('temporary', 'ВКонтакте временно не отвечает.', c);
   if ([7, 15, 18, 19, 30, 203, 210, 211, 212, 260].includes(c)) return new VkError('access', 'Нет доступа (закрытый профиль, сообщество или удалённая запись).', c);
   if (c === 113 || c === 100) return new VkError('not_found', 'Страница или запись не найдена.', c);
+  // 1051 — метод недоступен для этого типа ключа (например, likes.getList с ключом VK ID)
+  if (c === 1051) return new VkError('unsupported', 'ВКонтакте не разрешает этот запрос с текущим способом входа.', c);
   if (c === 14) return new VkError('captcha', 'ВКонтакте попросил ввести капчу. Попробуйте обновить данные позже.', c);
   if (c === 8 || c === 3) return new VkError('api', 'ВКонтакте отклонил запрос. Возможно, приложению нужно обновление.', c);
   return new VkError('api', err.error_msg || 'Ошибка ВКонтакте', c);
@@ -105,7 +107,12 @@ class VkClient {
     } catch (_) {
       throw new VkError('temporary', 'Непонятный ответ ВКонтакте');
     }
-    if (json.error) throw classify(json.error);
+    if (json.error) {
+      const e = classify(json.error);
+      e.method = method;
+      if (e.code === 'api' || e.code === 'unsupported') e.message = `${e.message} (${method}, код ${json.error.error_code})`;
+      throw e;
+    }
     return json.response;
   }
 
@@ -122,24 +129,20 @@ class VkClient {
   }
 }
 
-/** Разбор ссылки на страницу/сообщество: vk.com/club123, public123, id123, event123, короткое имя, wall-1_2 */
-function parseSourceInput(input) {
-  let s = String(input || '').trim();
+/**
+ * Разбор ссылки на пост: https://vk.com/wall-123_456, vk.ru/club?w=wall-123_456,
+ * https://vk.com/feed?w=wall123_456, wall-123_456, -123_456.
+ * Возвращает { owner_id, post_id } или null.
+ */
+function parsePostInput(input) {
+  const s = String(input || '').trim();
   if (!s) return null;
-  s = s.replace(/^https?:\/\//i, '').replace(/^(m\.|www\.)/i, '');
-  s = s.replace(/^vk\.(com|ru)\//i, '');
-  s = s.split(/[?#]/)[0].replace(/\/+$/, '');
-  if (s.startsWith('@')) s = s.slice(1);
-  let m;
-  if ((m = /^(club|public|event)(\d+)$/i.exec(s))) return { kind: 'group', id: Number(m[2]) };
-  if ((m = /^id(\d+)$/i.exec(s))) return { kind: 'user', id: Number(m[1]) };
-  if ((m = /^wall(-?\d+)/i.exec(s))) {
-    const n = Number(m[1]);
-    return n < 0 ? { kind: 'group', id: -n } : { kind: 'user', id: n };
-  }
-  if (/^-\d+$/.test(s)) return { kind: 'group', id: -Number(s) };
-  if (/^[a-z0-9_.]{2,}$/i.test(s)) return { kind: 'screen', name: s };
-  return null;
+  let m = /wall(-?\d+)_(\d+)/i.exec(s) || /^(-?\d+)_(\d+)$/.exec(s);
+  if (!m) return null;
+  const owner = Number(m[1]);
+  const post = Number(m[2]);
+  if (!owner || !post) return null;
+  return { owner_id: owner, post_id: post };
 }
 
 /** Фото максимального качества из вложения photo */
@@ -186,4 +189,4 @@ function postText(item) {
   return t;
 }
 
-module.exports = { VkClient, VkError, parseSourceInput, extractPhotos, bestPhoto, postText, API_VERSION };
+module.exports = { VkClient, VkError, parsePostInput, extractPhotos, bestPhoto, postText, API_VERSION };

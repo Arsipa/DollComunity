@@ -14,7 +14,6 @@ export const S = {
   version: '',
   // производные
   byId: new Map(),
-  sourcesById: new Map(),
   likedBy: new Map(), // uid -> [postId]
 };
 
@@ -29,7 +28,6 @@ export function setData(d) {
 
 export function reindex() {
   S.byId = new Map(S.posts.map((p) => [p.id, p]));
-  S.sourcesById = new Map((S.settings?.sources || []).map((s) => [s.id, s]));
   const liked = new Map();
   for (const p of S.posts) {
     for (const uid of Object.keys(p.likers || {})) {
@@ -66,8 +64,11 @@ export function localChanges(p) {
   return ['text', 'date', 'photos'].filter((f) => p.overrides?.[f] && !same(f, p.local[f], p.original[f]));
 }
 export const vkChanged = (p) => Object.keys(p.vk_changed || {});
-export function sourceName(p) {
-  const s = S.sourcesById.get(p.source_id) || (S.settings?.sources || []).find((x) => x.owner_id === p.owner_id);
-  return s ? s.name : p.owner_id < 0 ? `Сообщество ${-p.owner_id}` : `Страница id${p.owner_id}`;
+/** Чья это стена: название сообщества или имя (из VK), иначе — номер */
+export function ownerName(p) {
+  if (p.owner_name) return p.owner_name;
+  const legacy = (S.settings?.sources || []).find((x) => x.owner_id === p.owner_id); // данные старых версий
+  if (legacy) return legacy.name;
+  return p.owner_id < 0 ? `Сообщество ${-p.owner_id}` : `Страница id${p.owner_id}`;
 }
 export const likersOf = (p) => Object.keys(p.likers || {});

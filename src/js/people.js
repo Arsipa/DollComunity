@@ -8,7 +8,7 @@ const userOf = (id) => S.users[id] || { id: Number(id), first_name: 'Участ�
 function personRow(u, extra = '') {
   return html(`<div class="person" data-uid="${u.id}" style="cursor:pointer">
     ${avatar(u, 'md')}
-    <div class="name">${esc(userName(u))}<small>${u.city ? esc(u.city) + ' · ' : ''}${pl(u.likes || 0, 'лайк', 'лайка', 'лайков')} в библиотеке${u.is_closed ? ' · закрытый профиль' : ''}${u.deactivated ? ' · страница удалена' : ''}</small></div>
+    <div class="name">${esc(userName(u))}<small>${u.city ? esc(u.city) + ' · ' : ''}${pl(u.likes || 0, 'лайк', 'лайка', 'лайков')} в моих постах${u.is_closed ? ' · закрытый профиль' : ''}${u.deactivated ? ' · страница удалена' : ''}</small></div>
     ${extra}
     <button class="link-btn" data-vk title="Открыть профиль ВКонтакте">${icon('external')}</button>
   </div>`);
@@ -43,7 +43,7 @@ export function openLikers(postId) {
     else list.sort((a, b) => (b.u.likes || 0) - (a.u.likes || 0));
     d.body.innerHTML = '';
     if (!ids.length) {
-      d.body.innerHTML = `<div class="list-empty">${p.likes_count ? 'Список ещё не загружен. Нажмите «Обновить данные» в библиотеке.' : 'Пока никто не поставил лайк.'}</div>`;
+      d.body.innerHTML = `<div class="list-empty">${p.likes_count ? 'Список ещё не загружен. Нажмите «Обновить данные» в «Моих постах».' : 'Пока никто не поставил лайк.'}</div>`;
       return;
     }
     if (ids.length < p.likes_count) d.body.append(html(`<div class="notice amber" style="margin:6px 4px 10px">${icon('info')}<div>Собрано ${num(ids.length)} из ${num(p.likes_count)}. Часть лайков ВКонтакте может не показывать (например, от закрытых или удалённых страниц).</div></div>`));
@@ -64,7 +64,6 @@ export function openUser(uid) {
   uid = String(uid);
   const u = userOf(uid);
   const liked = (S.likedBy.get(uid) || []).map((id) => S.byId.get(id)).filter(Boolean).sort((a, b) => date(b) - date(a));
-  const sources = new Set(liked.map((p) => p.source_id));
   const d = drawer({ title: 'Участник' });
   d.body.innerHTML = `
     <div class="profile-head">
@@ -76,14 +75,14 @@ export function openUser(uid) {
     <div class="profile-stats">
       <div><b>${num(liked.length)}</b><span>лайков</span></div>
       <div><b>${S.posts.length ? Math.round((liked.length / S.posts.length) * 100) : 0}%</b><span>публикаций</span></div>
-      <div><b>${num(sources.size)}</b><span>${plural3(sources.size)}</span></div>
+      <div><b>${num(S.posts.length)}</b><span>моих постов</span></div>
     </div>
     <div class="muted small" style="margin:-4px 0 12px;text-align:center">Впервые замечен(а) ${fmtMs(u.first_seen, false)} · последний лайк замечен ${fmtMs(u.last_like_seen, false)}</div>
     <div class="label" style="margin:6px 4px 10px">Понравившиеся публикации</div>
     <div class="mini-posts" id="u-posts"></div>`;
   d.el.querySelector('[data-vk]').onclick = () => window.api.openUrl(u.url || `https://vk.com/id${u.id}`);
   const box = d.el.querySelector('#u-posts');
-  if (!liked.length) box.outerHTML = '<div class="list-empty">В библиотеке нет публикаций, которые понравились этому участнику.</div>';
+  if (!liked.length) box.outerHTML = '<div class="list-empty">Среди ваших постов нет тех, что понравились этому участнику.</div>';
   else
     incremental(
       box,
@@ -96,14 +95,6 @@ export function openUser(uid) {
       },
       { batch: 45, root: d.body },
     );
-}
-function plural3(n) {
-  const a = n % 100;
-  const b = n % 10;
-  if (a > 10 && a < 20) return 'источников';
-  if (b === 1) return 'источник';
-  if (b > 1 && b < 5) return 'источника';
-  return 'источников';
 }
 
 // ---------- раздел «Пользователи» ----------
@@ -118,7 +109,7 @@ export function renderUsers() {
         ? `<div class="toolbar">
       <div class="search">${icon('search')}<input class="input" id="u-q" placeholder="Поиск по имени или городу…" value="${esc(UF.q)}" /></div>
       <select class="select" id="u-sort"><option value="likes">Больше лайков</option><option value="name">По имени</option><option value="recent">Недавно появившиеся</option></select>
-      <select class="select" id="u-filter"><option value="all">Все</option><option value="active">Лайкали публикации из библиотеки</option><option value="open">Открытые профили</option><option value="closed">Закрытые профили</option></select>
+      <select class="select" id="u-filter"><option value="all">Все</option><option value="active">Лайкали мои посты</option><option value="open">Открытые профили</option><option value="closed">Закрытые профили</option></select>
       <span class="result-line" id="u-count"></span>
     </div>
     <div class="people" id="u-grid"></div>`

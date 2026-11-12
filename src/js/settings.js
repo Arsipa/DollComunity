@@ -1,7 +1,102 @@
 // Настройки: ВКонтакте, хранение, журнал, о программе.
 import { S, reload } from './state.js';
 import { startTour } from './tour.js';
-import { icon, esc, $, $$, bytes, toast, toastError, confirmDialog, modal } from './util.js';
+import { icon, esc, $, $$, bytes, pl, toast, toastError, confirmDialog, modal } from './util.js';
+import { emptyTrash } from './trash.js';
+import { go } from './app.js';
+
+// ---- параметры обновления (раньше были на вкладке «Источники») ----
+function syncPanel(s) {
+  return `<div class="panel" id="p-sync">
+    <div class="panel-title">${icon('refresh')} Обновление данных</div>
+    <p class="panel-sub">Кнопка «Обновить данные» проверяет только посты, которые вы добавили, — больше ничего не скачивается.</p>
+    <label class="check"><input type="checkbox" id="opt-allphotos" ${s.sync.all_photos ? 'checked' : ''} /><span>Сохранять все фотографии поста<br><span class="hint">Иначе — только первую</span></span></label>
+    <label class="check"><input type="checkbox" id="opt-avatars" ${s.sync.save_avatars ? 'checked' : ''} /><span>Сохранять аватары тех, кто лайкнул<br><span class="hint">Чтобы они были видны без интернета</span></span></label>
+    <label class="check"><input type="checkbox" id="opt-likes" ${s.sync.refresh_all_likes ? 'checked' : ''} /><span>Полная проверка лайков при каждом обновлении<br><span class="hint">Медленнее. Обычно список перепроверяется, только если изменилось число лайков.</span></span></label>
+  </div>`;
+}
+
+// ---- списки лайков: вход на vk.com (и сервисный ключ для старых приложений VK) ----
+function likesPanel(acc) {
+  const has = !!acc.serviceKey;
+  return `<div class="panel" id="p-likes">
+    <div class="panel-title">${icon('heart')} Списки лайков</div>
+    <p class="panel-sub">ВКонтакте не даёт приложениям VK ID узнать, кто поставил лайк. Поэтому программа читает список «Оценили» прямо со страницы поста на vk.com — так же, как его видите вы.</p>
+    <div id="web-status" class="row" style="margin-bottom:10px"><span class="hint">Проверяю вход на vk.com…</span></div>
+    <span class="hint">Без входа видны только открытые посты и только первые ~350 лайкнувших. Пароль вы вводите на странице ВКонтакте — программа его не видит.</span>
+    <details class="more"><summary>Сервисный ключ (для старых приложений VK)</summary>
+      ${
+        has
+          ? `<div class="notice mint" style="margin:8px 0 12px">${icon('check')}<div>Сервисный ключ указан. Программа сначала попробует его, а если ВКонтакте откажет — возьмёт списки со страницы vk.com.</div></div>
+             <div class="row"><button class="btn ghost danger" id="svc-clear">Удалить ключ</button></div>`
+          : `<p class="hint">Нужен, только если ваше приложение создано на vk.com/dev (не через VK ID). У приложений VK ID сервисный ключ лайки не получает.</p>
+             <div class="field"><label>Сервисный ключ доступа</label>
+               <div class="row"><input class="input" id="svc-key" type="password" placeholder="Вставьте ключ" autocomplete="off" spellcheck="false" style="flex:1" /><button class="btn primary" id="svc-save">Сохранить</button></div>
+             </div>`
+      }
+    </details>
+  </div>`;
+}
+
+function renderWebStatus(st) {
+  const box = $('#web-status');
+  if (!box) return;
+  box.innerHTML = st.loggedIn
+    ? `<div class="notice mint" style="flex:1">${icon('check')}<div>Вы вошли на vk.com — списки лайков загружаются полностью.</div></div>
+       <button class="btn ghost" id="web-logout">Выйти</button>`
+    : `<span style="flex:1">${st.offline ? 'Не удалось проверить вход — нет связи с ВКонтакте.' : 'Вход на vk.com не выполнен.'}</span>
+       <button class="btn primary" id="web-login">Войти на vk.com</button>`;
+  $('#web-login')?.addEventListener('click', async (e) => {
+    e.currentTarget.disabled = true;
+    try {
+      const r = await window.api.vkWebLogin();
+      renderWebStatus(r);
+      if (r.loggedIn) toast('Готово. Нажмите «Обновить данные», чтобы загрузить списки лайков.');
+    } catch (err) {
+      toastError(err);
+      renderWebStatus({ loggedIn: false });
+    }
+  });
+  $('#web-logout')?.addEventListener('click', async () => {
+    const ok = await confirmDialog({ title: 'Выйти с vk.com?', text: 'Списки лайков будут загружаться без входа: только открытые посты и до ~350 человек. Уже собранные лайки останутся.', ok: 'Выйти' });
+    if (!ok) return;
+    renderWebStatus(await window.api.vkWebLogout().catch(() => ({ loggedIn: false })));
+  });
+}
+
+function bindLikesPanel() {
+  window.api.vkWebStatus().then(renderWebStatus, () => renderWebStatus({ loggedIn: false, offline: true }));
+  $('#svc-save')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const r = await window.api.setServiceKey($('#svc-key').value);
+      await reload();
+      toast('Сервисный ключ сохранён.');
+      if (!r.secure) toast('Шифрование Windows недоступно — ключ понадобится снова после перезапуска', { error: true, timeout: 9000 });
+    } catch (err) {
+      toastError(err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  $('#svc-key')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('#svc-save').click();
+  });
+  $('#svc-clear')?.addEventListener('click', async () => {
+    const ok = await confirmDialog({ title: 'Удалить сервисный ключ?', text: 'Списки лайков будут загружаться со страницы vk.com. Уже собранные лайки останутся.', ok: 'Удалить', danger: true });
+    if (!ok) return;
+    await window.api.clearServiceKey();
+    await reload();
+  });
+}
+
+function bindSyncPanel() {
+  const upd = (patch) => window.api.updateSettings({ sync: patch }).then((st) => (S.settings = st)).catch(toastError);
+  $('#opt-allphotos').onchange = (e) => upd({ all_photos: e.target.checked });
+  $('#opt-avatars').onchange = (e) => upd({ save_avatars: e.target.checked });
+  $('#opt-likes').onchange = (e) => upd({ refresh_all_likes: e.target.checked });
+}
 
 export function renderSettings() {
   const el = $('#view-settings');
@@ -35,7 +130,7 @@ export function renderSettings() {
                 <li>Откройте <a href="#" data-url="https://id.vk.com/about/business/go">VK ID для бизнеса</a> и создайте приложение. Платформа — <b>Web</b>, название — любое.</li>
                 <li>Базовый домен: <b>localhost</b></li>
                 <li>Доверенный Redirect URL: <b>https://localhost/vk-callback</b> (если указали другой — впишите его в поле выше).</li>
-                <li>В разделе «Доступы» по возможности включите «Стена» и «Сообщества» — без них программа тоже войдёт, но закрытые сообщества будут недоступны.</li>
+                <li>В разделе «Доступы» по возможности включите «Стена» и «Сообщества» — без них программа тоже войдёт, но посты в закрытых сообществах будут недоступны.</li>
                 <li>Скопируйте <b>ID приложения</b> (только цифры) в поле выше и нажмите «Войти через ВКонтакте».</li>
               </ol>
               <span class="hint">ID приложения не является секретом. Ключ входа хранится зашифрованным и продлевается автоматически.</span>
@@ -46,6 +141,8 @@ export function renderSettings() {
             </details>`
           }
         </div>
+        ${likesPanel(acc)}
+        ${syncPanel(s)}
       </div>
       <div class="col">
         <div class="panel">
@@ -54,6 +151,15 @@ export function renderSettings() {
           <dl class="kv"><dt>Папка</dt><dd>${esc(S.paths.root)}</dd><dt>Занято</dt><dd id="usage">считаю…</dd></dl>
           <div class="row" style="margin-top:14px"><button class="btn" id="open-folder">${icon('folder')} Открыть папку</button><button class="btn ghost" id="change-folder">Изменить расположение</button><button class="btn ghost" id="integrity">${icon('shield')} Проверить файлы</button></div>
           <div id="integrity-res"></div>
+        </div>
+        <div class="panel" id="p-clean">
+          <div class="panel-title">${icon('trash')} Очистка</div>
+          <p class="panel-sub">Во ВКонтакте ничего не удаляется — только карточки в программе.</p>
+          <div class="row">
+            <button class="btn ghost danger" id="clean-posts" ${S.posts.length ? '' : 'disabled'}>${icon('trash')} Очистить все посты${S.posts.length ? ` (${S.posts.length})` : ''}</button>
+            <button class="btn ghost danger" id="clean-trash" ${S.deleted.length ? '' : 'disabled'}>${icon('trash')} Удалить всё в корзине${S.deleted.length ? ` (${S.deleted.length})` : ''}</button>
+          </div>
+          <span class="hint">«Очистить все посты» переносит карточки в корзину — оттуда их можно вернуть. «Удалить всё в корзине» удаляет навсегда.</span>
         </div>
         <div class="panel">
           <div class="panel-title">${icon('info')} О программе</div>
@@ -64,6 +170,27 @@ export function renderSettings() {
     </div>`;
 
   $$('[data-url]', el).forEach((a) => (a.onclick = (e) => (e.preventDefault(), window.api.openUrl(a.dataset.url))));
+  bindSyncPanel();
+  bindLikesPanel();
+  // ---- очистка ----
+  $('#clean-posts').onclick = async () => {
+    const n = S.posts.length;
+    const ok = await confirmDialog({
+      title: 'Очистить все посты?',
+      text: `${pl(n, 'карточка переместится', 'карточки переместятся', 'карточек переместятся')} в корзину. Их можно будет вернуть оттуда. Во ВКонтакте посты не удалятся.`,
+      ok: 'Очистить',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const moved = await window.api.trashAllPosts();
+      await reload();
+      toast(`В корзину перемещено: ${pl(moved, 'карточка', 'карточки', 'карточек')}`, { action: 'Открыть корзину', onAction: () => go('trash') });
+    } catch (e) {
+      toastError(e);
+    }
+  };
+  $('#clean-trash').onclick = () => emptyTrash();
   // ---- VK ----
   $('#vk-login')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;

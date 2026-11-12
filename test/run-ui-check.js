@@ -21,9 +21,9 @@ const CHECK =
 const go = (v) => `document.querySelector('[data-view=${v}]').click()`;
 const steps = [
   `lib::${CHECK}`,
-  `src::${go('sources')}`,
-  `src2::${CHECK}`,
-  `set::${go('settings')}`,
+  `add::document.getElementById('lib-add').click()`,
+  `add2::${CHECK}`,
+  `set::document.querySelector('.overlay').remove(),${go('settings')}`,
   `set2::${CHECK}`,
   `users::${go('users')}`,
   `users2::${CHECK}`,

@@ -1,16 +1,15 @@
-// Подробная карточка: галерея, полный текст, сравнение «Моя версия / Оригинал ВКонтакте», история, редактор.
-import { S, eff, photos, text, date, localChanges, vkChanged, sourceName, likersOf, replacePost, reload, emit } from './state.js';
-import { icon, esc, $, $$, html, num, pl, fmtDate, fmtMs, photoSrc, placeholder, modal, toast, toastError, wordDiff, confirmDialog } from './util.js';
-import { openLikers } from './people.js';
-import { deletePost } from './library.js';
+// Подробная карточка: галерея, полный текст, редактор.
+import { S, photos, text, date, localChanges, ownerName, likersOf, replacePost, emit } from './state.js';
+import { icon, esc, num, pl, fmtDate, fmtMs, photoSrc, placeholder, modal, toast, toastError, avatar, userName } from './util.js';
+import { openLikers, openUser } from './people.js';
+import { deletePost, sourceChip, ownerUrl } from './library.js';
 
 const FIELD = { text: 'Текст', date: 'Дата', photos: 'Фотографии' };
 
-export function openPost(id, tab = null) {
+export function openPost(id, startIdx = 0) {
   const p = S.byId.get(id);
   if (!p) return;
-  let idx = 0;
-  let current = tab || (vkChanged(p).length ? 'compare' : 'post');
+  let idx = Number(startIdx) || 0;
   const m = modal({ cls: 'wide', raw: true, body: '<div class="detail" style="min-height:0"></div>', onClose: () => emit('post-closed') });
   m.el.style.height = 'min(860px, calc(100vh - 60px))';
 
@@ -20,7 +19,6 @@ export function openPost(id, tab = null) {
     const ph = photos(post);
     idx = Math.min(idx, Math.max(0, ph.length - 1));
     const changes = localChanges(post);
-    const vkc = vkChanged(post);
     const root = m.el.querySelector('.detail');
     root.innerHTML = `
       <div class="gallery">
@@ -31,61 +29,26 @@ export function openPost(id, tab = null) {
         ${ph.length > 1 ? `<div class="g-thumbs">${ph.map((x, i) => `<img src="${esc(photoSrc(x))}" class="${i === idx ? 'on' : ''}" data-i="${i}" alt="" />`).join('')}</div>` : ''}
       </div>
       <div class="detail-side">
-        <div class="row between">
-          <div class="tabs">
-            <button class="tab ${current === 'post' ? 'on' : ''}" data-tab="post">Публикация</button>
-            <button class="tab ${current === 'compare' ? 'on' : ''}" data-tab="compare">Сравнение ${changes.length ? `<span class="badge pink">${changes.length}</span>` : ''}</button>
-            <button class="tab ${current === 'history' ? 'on' : ''}" data-tab="history">История</button>
-          </div>
+        <div class="row" style="justify-content:flex-end">
           <button class="btn ghost icon-only sm" data-close title="Закрыть">${icon('close')}</button>
         </div>
-        <div id="d-tab"></div>
+        <div id="d-tab">${postTab(post, changes)}</div>
       </div>`;
-    const tabEl = root.querySelector('#d-tab');
-    if (current === 'post') tabEl.innerHTML = postTab(post, changes, vkc);
-    if (current === 'compare') tabEl.innerHTML = compareTab(post, changes, vkc);
-    if (current === 'history') tabEl.innerHTML = historyTab(post);
-
-    root.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => ((current = b.dataset.tab), render())));
     root.querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => ((idx = (idx + Number(b.dataset.g) + ph.length) % ph.length), render())));
     root.querySelectorAll('.g-thumbs [data-i]').forEach((b) => (b.onclick = () => ((idx = Number(b.dataset.i)), render())));
-    root.querySelector('[data-likes]')?.addEventListener('click', () => openLikers(id));
+    root.querySelectorAll('[data-likes]').forEach((b) => b.addEventListener('click', () => openLikers(id)));
+    root.querySelector('[data-src]')?.addEventListener('click', () => window.api.openUrl(ownerUrl(post)));
+    root.querySelectorAll('[data-uid]').forEach((b) => b.addEventListener('click', () => openUser(b.dataset.uid)));
     root.querySelector('[data-orig]')?.addEventListener('click', () => window.api.openUrl(post.url));
     root.querySelector('[data-edit]')?.addEventListener('click', () => openEditor(id, render));
     root.querySelector('[data-del]')?.addEventListener('click', () => deletePost(id, () => m.close()));
-    root.querySelectorAll('[data-goto]').forEach((b) => (b.onclick = () => ((current = b.dataset.goto), render())));
-    root.querySelectorAll('[data-accept]').forEach(
-      (b) =>
-        (b.onclick = async () => {
-          const f = b.dataset.accept;
-          const ok = await confirmDialog({ title: 'Принять версию ВКонтакте?', text: `${FIELD[f]}: ваша версия будет заменена оригиналом из ВКонтакте. Ваш вариант останется в истории изменений.`, ok: 'Принять оригинал' });
-          if (!ok) return;
-          try {
-            replacePost(await window.api.acceptOriginal(id, f));
-            emit('post-changed');
-            render();
-            toast('Принята версия ВКонтакте');
-          } catch (e) {
-            toastError(e);
-          }
-        }),
-    );
-    root.querySelectorAll('[data-keep]').forEach(
-      (b) =>
-        (b.onclick = async () => {
-          replacePost(await window.api.keepMine(id, b.dataset.keep));
-          emit('post-changed');
-          render();
-          toast('Ваша версия сохранена');
-        }),
-    );
-    root.querySelectorAll('[data-merge]').forEach((b) => (b.onclick = () => openEditor(id, render, { merge: true })));
   };
 
   const onKey = (e) => {
     if (!document.body.contains(m.el)) return document.removeEventListener('keydown', onKey);
     const ph = photos(S.byId.get(id) || { original: {} });
-    if (ph.length < 2 || document.querySelector('.overlay:last-of-type .modal') !== m.el) return;
+    const layers = document.querySelectorAll('.overlay, .drawer-wrap');
+    if (ph.length < 2 || layers[layers.length - 1] !== m.el.parentElement) return; // стрелки — только если пост сверху
     if (e.key === 'ArrowRight') ((idx = (idx + 1) % ph.length), render());
     if (e.key === 'ArrowLeft') ((idx = (idx - 1 + ph.length) % ph.length), render());
   };
@@ -93,82 +56,51 @@ export function openPost(id, tab = null) {
   render();
 }
 
-function postTab(p, changes, vkc) {
+const LIKERS_INLINE = 40;
+
+function postTab(p, changes) {
   const t = text(p);
   const ids = likersOf(p);
+  const stats = [
+    p.views ? `${icon('image')} ${pl(p.views, 'просмотр', 'просмотра', 'просмотров')}` : '',
+    p.reposts ? `${icon('refresh')} ${pl(p.reposts, 'репост', 'репоста', 'репостов')}` : '',
+    p.comments ? `${icon('doc')} ${pl(p.comments, 'комментарий', 'комментария', 'комментариев')}` : '',
+  ].filter(Boolean);
+  const people = ids
+    .map((id) => S.users[id] || { id, first_name: 'Участник', last_name: String(id) })
+    .sort((a, b) => (b.likes || 0) - (a.likes || 0) || userName(a).localeCompare(userName(b), 'ru'));
   return `
-    ${vkc.length ? `<div class="notice lav">${icon('compare')}<div>Публикация изменилась во ВКонтакте после вашей правки. Ваша версия сохранена. <a href="#" data-goto="compare">Сравнить версии</a></div></div>` : changes.length ? `<div class="notice amber" style="background:var(--pink-soft);color:#8a3653">${icon('edit')}<div>Есть локальные изменения: ${changes.map((f) => FIELD[f].toLowerCase()).join(', ')}. <a href="#" data-goto="compare">Сравнить с оригиналом</a></div></div>` : ''}
-    ${p.vk_missing ? `<div class="notice amber">${icon('alert')}<div>Публикация не найдена во ВКонтакте с ${fmtMs(p.vk_missing, false)} — возможно, её удалили или скрыли. В вашей библиотеке она сохранена.</div></div>` : ''}
-    <div class="card-meta">${icon('calendar')} ${fmtDate(date(p), true)} · ${esc(sourceName(p))}</div>
+    ${changes.length ? `<div class="notice amber" style="background:var(--pink-soft);color:#8a3653">${icon('edit')}<div>Изменено вами: ${changes.map((f) => FIELD[f].toLowerCase()).join(', ')}. Ваша версия главнее данных ВКонтакте.</div></div>` : ''}
+    ${p.vk_missing ? `<div class="notice amber">${icon('alert')}<div>Пост не найден во ВКонтакте с ${fmtMs(p.vk_missing, false)} — возможно, его удалили или скрыли. У вас он сохранён.</div></div>` : ''}
+    <section class="d-head">
+      ${p.title ? `<h2 class="d-title">${esc(p.title)}</h2>` : ''}
+      <div class="d-meta">${sourceChip(p)}<span class="card-date">${icon('calendar')}${fmtDate(date(p), true)}</span></div>
+    </section>
     <p class="detail-text">${t ? esc(t) : '<span class="muted">Без текста</span>'}</p>
-    <div class="row">
-      <button class="likes-pill" data-likes>${icon('heartFill', 'fill')} ${num(p.likes_count)}</button>
-      <span class="muted small">${ids.length ? `собрано ${pl(ids.length, 'имя', 'имени', 'имён')} — нажмите, чтобы посмотреть всех` : 'список появится после обновления данных'}</span>
+    <div class="d-stats">
+      <button class="likes-pill" data-likes title="Кто поставил «Мне нравится»">${icon('heartFill', 'fill')} ${num(p.likes_count)}</button>
+      ${stats.map((x) => `<span class="d-stat">${x}</span>`).join('')}
     </div>
-    <div class="row small muted">${p.reposts ? `${icon('refresh')} ${pl(p.reposts, 'репост', 'репоста', 'репостов')}` : ''} ${p.views ? `· ${pl(p.views, 'просмотр', 'просмотра', 'просмотров')}` : ''} ${p.comments ? `· ${pl(p.comments, 'комментарий', 'комментария', 'комментариев')}` : ''}</div>
-    <hr class="stitch" style="margin:4px 0" />
     <div class="detail-actions">
       <button class="btn primary" data-orig>${icon('external')} Открыть оригинал</button>
       <button class="btn" data-edit>${icon('edit')} Редактировать</button>
       <button class="btn ghost danger" data-del>${icon('trash')} Удалить</button>
     </div>
-    <div class="muted small">Добавлено ${fmtMs(p.added_at)} · проверено ${fmtMs(p.last_checked)}</div>`;
-}
-
-function photosStrip(list) {
-  if (!list || !list.length) return '<span class="muted small">Нет фото</span>';
-  return `<div class="version-photos">${list.map((x) => `<img src="${esc(photoSrc(x))}" alt="" data-ph="" />`).join('')}</div>`;
-}
-
-function compareTab(p, changes, vkc) {
-  if (!changes.length)
-    return `<div class="notice mint">${icon('check')}<div>Локальных изменений нет — карточка совпадает с оригиналом ВКонтакте. Если вы отредактируете карточку, здесь появится сравнение «Моя версия / Оригинал ВКонтакте».</div></div>`;
-  return changes
-    .map((f) => {
-      const mine = p.local[f];
-      const orig = p.original[f];
-      let a;
-      let b;
-      if (f === 'text') {
-        const d = wordDiff(orig, mine);
-        a = `<div class="txt">${d.b || '<span class="muted">пусто</span>'}</div>`;
-        b = `<div class="txt">${d.a || '<span class="muted">пусто</span>'}</div>`;
-      } else if (f === 'date') {
-        a = `<div class="txt">${fmtDate(mine, true)}</div>`;
-        b = `<div class="txt">${fmtDate(orig, true)}</div>`;
-      } else {
-        a = photosStrip(mine);
-        b = photosStrip(orig);
-      }
-      return `<div style="margin-bottom:18px">
-        <div class="row between" style="margin-bottom:8px"><b>${FIELD[f]}</b>${vkc.includes(f) ? `<span class="badge lav">${icon('compare')} изменено в VK ${fmtMs(p.vk_changed[f], false)}</span>` : ''}</div>
-        <div class="compare">
-          <div class="version mine"><h4>${icon('edit')} Моя версия</h4>${a}</div>
-          <div class="version"><h4>${icon('external')} Оригинал ВКонтакте</h4>${b}</div>
-        </div>
-        <div class="row" style="margin-top:10px">
-          <button class="btn sm ${vkc.includes(f) ? 'primary' : ''}" data-keep="${f}">${icon('check')} Оставить мою</button>
-          <button class="btn sm" data-accept="${f}">${icon('restore')} Принять оригинал VK</button>
-          ${f === 'text' ? `<button class="btn sm lav" data-merge="${f}">${icon('edit')} Объединить вручную</button>` : ''}
-        </div>
-      </div>`;
-    })
-    .join('');
-}
-
-function historyTab(p) {
-  const KIND = { import: 'Публикация добавлена в библиотеку', vk: 'Изменилось во ВКонтакте', edit: 'Изменено вами', accept: 'Принят оригинал ВКонтакте', restore: 'Восстановлено из корзины', missing: 'Не найдено во ВКонтакте' };
-  const items = [...(p.history || [])].reverse();
-  if (!items.length) return '<div class="list-empty">История пуста</div>';
-  return `<ul class="history">${items
-    .map(
-      (h) => `<li><div class="when">${fmtMs(h.at)}</div><div class="what"><b>${KIND[h.kind] || h.kind}</b>${h.field ? ` · ${FIELD[h.field] || h.field}` : ''}
-      ${h.field === 'text' && (h.from !== undefined || h.to !== undefined) ? `<div class="diffline">было: «${esc(String(h.from ?? '').slice(0, 160))}${String(h.from ?? '').length > 160 ? '…' : ''}»<br>стало: «${esc(String(h.to ?? '').slice(0, 160))}${String(h.to ?? '').length > 160 ? '…' : ''}»</div>` : ''}
-      ${h.field === 'date' ? `<div class="diffline">${fmtDate(h.from, true)} → ${fmtDate(h.to, true)}</div>` : ''}
-      ${h.field === 'photos' ? `<div class="diffline">${esc(h.from)} → ${esc(h.to)}</div>` : ''}
-      </div></li>`,
-    )
-    .join('')}</ul>`;
+    ${
+      people.length
+        ? `<section class="d-likers">
+        <div class="d-sub">${icon('heart')} Понравилось ${pl(people.length, 'человеку', 'людям', 'людям')}${people.length < p.likes_count ? ` <span class="muted">из ${num(p.likes_count)}</span>` : ''}</div>
+        <div class="d-people">${people
+          .slice(0, LIKERS_INLINE)
+          .map((u) => `<button class="person" data-uid="${esc(String(u.id))}" title="Открыть карточку участника">${avatar(u)}<span class="name">${esc(userName(u))}${u.likes > 1 ? `<small>${pl(u.likes, 'лайк', 'лайка', 'лайков')} у вас</small>` : ''}</span></button>`)
+          .join('')}</div>
+        ${people.length > LIKERS_INLINE ? `<button class="btn ghost sm" data-likes>Показать всех (${num(people.length)})</button>` : ''}
+      </section>`
+        : p.likes_count
+          ? `<div class="muted small">Список тех, кто поставил лайк, появится после обновления данных.</div>`
+          : ''
+    }
+    <div class="muted small d-foot">Добавлено ${fmtMs(p.added_at)} · проверено ${fmtMs(p.last_checked)}</div>`;
 }
 
 // ---------- редактор ----------
@@ -178,18 +110,19 @@ const toLocalInput = (sec) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 
-export function openEditor(id, after, { merge = false } = {}) {
+export function openEditor(id, after) {
   const p = S.byId.get(id);
   if (!p) return;
   let ph = [...photos(p)];
-  const startText = merge && p.overrides.text ? `${p.local.text}\n\n——— Оригинал ВКонтакте ———\n${p.original.text}` : text(p);
+  const startText = text(p);
   const m = modal({
-    title: merge ? 'Объединить тексты' : 'Редактировать карточку',
+    title: 'Редактировать карточку',
     cls: 'mid',
     body: `
-      <div class="notice lav" style="margin-bottom:14px">${icon('info')}<div>Изменения сохраняются только в вашей библиотеке. Публикация во ВКонтакте не изменится, а оригинал будет доступен для сравнения.</div></div>
-      <div class="field"><label>Текст</label><textarea class="input" id="e-text" rows="${merge ? 14 : 9}">${esc(startText)}</textarea>${merge ? '<span class="hint">Оставьте нужные части обоих текстов и удалите лишнее.</span>' : ''}</div>
-      <div class="field"><label>Дата публикации</label><input type="datetime-local" class="input" id="e-date" value="${toLocalInput(date(p))}" style="max-width:260px" /><span class="hint">Меняется только отображение в библиотеке.</span></div>
+      <div class="notice lav" style="margin-bottom:14px">${icon('info')}<div>Изменения сохраняются только у вас. Пост во ВКонтакте не изменится.</div></div>
+      ${`<div class="field"><label>Название поста</label><input class="input" id="e-title" maxlength="200" placeholder="Например: Платье для Паолы, весна" value="${esc(p.title || '')}" /><span class="hint">Видно только вам.</span></div>`}
+      <div class="field"><label>Текст</label><textarea class="input" id="e-text" rows="9">${esc(startText)}</textarea></div>
+      <div class="field"><label>Дата публикации</label><input type="datetime-local" class="input" id="e-date" value="${toLocalInput(date(p))}" style="max-width:260px" /><span class="hint">Меняется только отображение у вас.</span></div>
       <div class="field"><label>Фотографии</label><div class="edit-photos" id="e-photos"></div><span class="hint">Первая фотография показывается на карточке.</span></div>
       ${p.overrides.photos ? '<button class="btn sm ghost" id="e-photo-reset">' + icon('restore') + ' Вернуть фото из ВКонтакте</button>' : ''}`,
     foot: `<button class="btn ghost" data-close>Отмена</button><button class="btn primary" id="e-save">${icon('check')} Сохранить</button>`,
@@ -233,7 +166,7 @@ export function openEditor(id, after, { merge = false } = {}) {
   m.el.querySelector('#e-save').onclick = async () => {
     const patch = {};
     const t = m.el.querySelector('#e-text').value;
-    if (t !== text(p) || (merge && p.overrides.text)) patch.text = t;
+    if (t !== text(p)) patch.text = t;
     const dv = m.el.querySelector('#e-date').value;
     if (dv) {
       const sec = Math.round(new Date(dv).getTime() / 1000);
@@ -241,9 +174,13 @@ export function openEditor(id, after, { merge = false } = {}) {
     }
     const keys = (a) => a.map((x) => x.key).join('|');
     if (keys(ph) !== keys(photos(p))) patch.photos = ph;
-    if (!Object.keys(patch).length) return m.close();
+    const titleEl = m.el.querySelector('#e-title');
+    const newTitle = titleEl ? titleEl.value.replace(/\s+/g, ' ').trim() : p.title || '';
+    const titleChanged = newTitle !== (p.title || '');
+    if (!Object.keys(patch).length && !titleChanged) return m.close();
     try {
-      replacePost(await window.api.editPost(id, patch));
+      if (titleChanged) replacePost(await window.api.setPostTitle(id, newTitle));
+      if (Object.keys(patch).length) replacePost(await window.api.editPost(id, patch));
       m.close();
       emit('post-changed');
       after && after();

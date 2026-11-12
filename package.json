@@ -36,6 +36,9 @@
       "desktop/sync.js",
       "desktop/model.js",
       "desktop/vkid.js",
+      "desktop/posts.js",
+      "desktop/wallfind.js",
+      "desktop/weblikes.js",
       "src/**/*",
       "package.json"
     ],

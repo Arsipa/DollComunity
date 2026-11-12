@@ -1,19 +1,17 @@
 // Точка входа интерфейса: навигация, обновление данных, приветствие.
 import { S, setData, reload, onState } from './state.js';
-import { icon, esc, $, $$, html, num, pl, ago, modal, toast, toastError } from './util.js';
+import { icon, esc, $, $$, html, num, pl, ago, modal, toast, toastError, autoEnhanceSelects } from './util.js';
 import { renderLibrary, renderGrid, hidePopover } from './library.js';
 import { renderStats } from './stats.js';
 import { renderUsers } from './people.js';
-import { renderSources } from './sources.js';
 import { renderSettings } from './settings.js';
 import { renderTrash } from './trash.js';
 import { startTour } from './tour.js';
 
 const VIEWS = [
-  { id: 'library', label: 'Библиотека', icon: 'library', render: renderLibrary, count: () => S.posts.length },
+  { id: 'library', label: 'Мои посты', icon: 'library', render: renderLibrary, count: () => S.posts.length },
   { id: 'stats', label: 'Статистика', icon: 'stats', render: renderStats },
   { id: 'users', label: 'Пользователи', icon: 'users', render: renderUsers, count: () => Object.keys(S.users).length },
-  { id: 'sources', label: 'Источники', icon: 'sources', render: renderSources, count: () => S.settings.sources.length },
   { id: 'trash', label: 'Корзина', icon: 'trash', render: renderTrash, count: () => S.deleted.filter((d) => d.post).length },
   { id: 'settings', label: 'Настройки', icon: 'settings', render: renderSettings },
 ];
@@ -49,8 +47,8 @@ export async function startSync(opts) {
     toast('Сначала подключите ВКонтакте в настройках', { error: true, action: 'Открыть настройки', onAction: () => go('settings') });
     return;
   }
-  if (!S.settings.sources.length) {
-    toast('Добавьте хотя бы один источник', { error: true, action: 'Добавить', onAction: () => go('sources') });
+  if (!S.posts.length && !(opts && opts.postIds)) {
+    toast('Сначала добавьте пост по ссылке', { error: true });
     return;
   }
   try {
@@ -69,32 +67,51 @@ export async function startSync(opts) {
   }
 }
 
+// Окно прогресса создаётся один раз, дальше меняются только цифры —
+// иначе кнопка «Остановить» пересоздаётся при каждом обновлении и по ней трудно попасть.
 function drawDock(p) {
   progress = p;
   const dock = $('#sync-dock');
-  const pct = p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : null;
-  dock.innerHTML = `<div class="sync-dock">
+  if (!dock.querySelector('.sync-dock')) {
+    dock.innerHTML = `<div class="sync-dock">
     <div class="row between"><h4>${icon('refresh', 'spin')} Обновляю данные</h4><button class="btn ghost sm" id="sync-stop" title="Уже полученные данные сохранятся">${icon('stop')} Остановить</button></div>
-    <div class="phase">${esc(p.phaseLabel || '')}${pct !== null ? ` · ${pct}%` : ''}${p.total ? ` <span class="muted">(${num(p.done)} из ${num(p.total)})</span>` : ''}</div>
-    <div class="progress ${pct === null ? 'indet' : ''}"><div style="width:${pct ?? 0}%"></div></div>
+    <div class="phase" data-k="phase"></div>
+    <div class="progress" data-k="bar"><div></div></div>
     <div class="sync-nums">
-      <div><b>${num(p.checked)}</b><span>проверено</span></div>
-      <div><b>${num(p.created)}</b><span>новых</span></div>
-      <div><b>${num(p.likesChanged || 0)}</b><span>лайки изм.</span></div>
-      <div><b style="${p.errors ? 'color:var(--red-deep)' : ''}">${num(p.errors)}</b><span>ошибок</span></div>
+      <div><b data-k="checked"></b><span>проверено</span></div>
+      <div><b data-k="created"></b><span>новых</span></div>
+      <div><b data-k="likes"></b><span>лайки изм.</span></div>
+      <div><b data-k="errors"></b><span>ошибок</span></div>
     </div>
     <div class="muted small" style="margin-top:8px">Можно продолжать пользоваться программой.</div>
   </div>`;
-  $('#sync-stop').onclick = () => {
-    window.api.syncCancel();
-    $('#sync-stop').disabled = true;
-  };
+    const stop = $('#sync-stop');
+    stop.onclick = () => {
+      window.api.syncCancel();
+      stop.disabled = true;
+      stop.lastChild.textContent = ' Останавливаю…';
+    };
+  }
+  const k = (name) => dock.querySelector(`[data-k="${name}"]`);
+  const pct = p.total ? Math.min(100, Math.round((p.done / p.total) * 100)) : null;
+  k('phase').innerHTML = `${esc(p.phaseLabel || '')}${pct !== null ? ` · ${pct}%` : ''}${p.total ? ` <span class="muted">(${num(p.done)} из ${num(p.total)})</span>` : ''}`;
+  const bar = k('bar');
+  bar.classList.toggle('indet', pct === null);
+  bar.firstElementChild.style.width = `${pct ?? 0}%`;
+  k('checked').textContent = num(p.checked);
+  k('created').textContent = num(p.created);
+  k('likes').textContent = num(p.likesChanged || 0);
+  const err = k('errors');
+  err.textContent = num(p.errors);
+  err.style.color = p.errors ? 'var(--red-deep)' : '';
 }
 
 function showReport(r) {
   $('#sync-dock').innerHTML = '';
   S.syncing = false;
   const errors = r.errors || [];
+  // списки лайков неполные или недоступны без входа на vk.com — предлагаем войти
+  const needLogin = errors.some((e) => /войдите на vk.com/i.test(e.message || ''));
   if (r.fatal && r.fatal.code !== 'aborted') {
     const offline = r.fatal.code === 'network';
     modal({
@@ -109,21 +126,33 @@ function showReport(r) {
     title: r.cancelled ? 'Обновление остановлено' : 'Обновление завершено!',
     body: `${r.cancelled ? `<p class="muted" style="margin-top:0">Всё, что успели получить, сохранено.</p>` : ''}
       <div class="report">
-        <div><b>${num(r.checked)}</b><span>Проверено публикаций</span></div>
-        <div><b style="color:var(--mint-deep)">${num(r.created)}</b><span>Новых публикаций</span></div>
+        <div><b>${num(r.checked)}</b><span>Проверено постов</span></div>
+        <div><b style="color:var(--mint-deep)">${num(r.created)}</b><span>Новых постов</span></div>
         <div><b>${num(r.updated)}</b><span>Обновлено</span></div>
         <div><b style="color:var(--lav-deep)">${num(r.conflicts)}</b><span>С локальными изменениями</span></div>
         ${r.missing ? `<div><b style="color:var(--amber-deep)">${num(r.missing)}</b><span>Пропали из ВКонтакте (сохранены у вас)</span></div>` : ''}
         <div><b style="${errors.length ? 'color:var(--red-deep)' : ''}">${num(errors.length)}</b><span>Ошибок</span></div>
       </div>
+      ${needLogin ? `<div class="notice amber" style="margin-top:14px">${icon('key')}<div>Без входа на vk.com ВКонтакте показывает не всех, кто лайкнул. Войдите на vk.com в программе — это нужно сделать один раз.</div></div>` : ''}
       ${errors.length ? `<details class="more"><summary>Подробнее об ошибках</summary><ul class="steps">${errors.slice(0, 15).map((e) => `<li><b>${esc(e.where)}:</b> ${esc(e.message)}</li>`).join('')}</ul></details>` : ''}`,
-    foot: `<button class="btn primary" data-close>${icon('check')} Отлично</button>`,
+    foot: needLogin
+      ? `<button class="btn ghost" data-close>Позже</button><button class="btn primary" data-close id="go-key">${icon('key')} Войти на vk.com</button>`
+      : `<button class="btn primary" data-close>${icon('check')} Отлично</button>`,
+  });
+  m.el.querySelector('#go-key')?.addEventListener('click', () => {
+    go('settings');
+    setTimeout(() => {
+      const p = document.getElementById('p-likes');
+      p?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById('web-login')?.focus({ preventScroll: true });
+    }, 120);
   });
 }
 
 // ---------- запуск ----------
 async function boot() {
   $('#brand-logo').innerHTML = icon('bow');
+  autoEnhanceSelects();
   try {
     setData(await window.api.init());
   } catch (e) {

@@ -1,16 +1,17 @@
 'use strict';
 /**
  * Синхронизация с VK.
- *  1. Интернет → 2. Авторизация → 3. Новые публикации источников →
- *  5. Проверка остальных публикаций библиотеки → 6. Лайки → 7. Профили → 8. Фото → 9. Аватары → 10. Отчёт.
+ *  1. Интернет → 2. Авторизация → 3. Проверка «Моих постов» (wall.getById, только добавленные вручную) →
+ *  6. Лайки → 7. Профили → 8. Фото → 9. Аватары → 10. Отчёт.
  * Данные сохраняются по ходу работы (контрольные точки), поэтому прерывание ничего не ломает.
  */
 const fs = require('fs');
 const fsp = fs.promises;
-const path = require('path');
 const { EventEmitter } = require('events');
 const { VkClient, VkError, extractPhotos, postText } = require('./vk');
 const M = require('./model');
+const { PostFetcher } = require('./wallfind');
+const { WebLikes, likersToIds } = require('./weblikes');
 
 const USER_FIELDS = 'photo_100,photo_200,screen_name,city,sex,is_closed,deactivated,bdate';
 const PROFILE_TTL = 7 * 24 * 3600 * 1000;
@@ -25,6 +26,15 @@ function freshFromItem(item) {
     views: item.views ? item.views.count : 0,
     comments: item.comments ? item.comments.count : 0,
   };
+}
+
+/** Имена владельцев постов из ответа wall.getById с extended=1: { owner_id: 'Название' } */
+function ownerNames(res) {
+  const out = {};
+  if (!res || Array.isArray(res)) return out;
+  for (const g of res.groups || []) out[-g.id] = g.name;
+  for (const u of res.profiles || []) out[u.id] = `${u.first_name} ${u.last_name}`.trim();
+  return out;
 }
 
 async function download(url, dest, timeout = 30000) {
@@ -56,10 +66,13 @@ async function pool(items, n, fn) {
 }
 
 class SyncEngine extends EventEmitter {
-  constructor({ store, getToken, refreshToken, log, makeThumb }) {
+  constructor({ store, getToken, refreshToken, getServiceToken, webLikes, log, makeThumb }) {
     super();
     this.store = store;
     this.getToken = getToken;
+    this.getServiceToken = getServiceToken; // сервисный ключ приложения — только для списков лайков (необязательно)
+    // списки лайков со страницы vk.com, когда VK API их не отдаёт; webLikes: false — отключить (для тестов)
+    this.webLikes = webLikes === false ? null : webLikes || (() => new WebLikes({ log }));
     this.refreshToken = refreshToken;
     this.log = log;
     this.makeThumb = makeThumb; // (srcPath, destPath) => Promise
@@ -69,6 +82,8 @@ class SyncEngine extends EventEmitter {
 
   cancel() {
     if (this.vk) this.vk.aborted = true;
+    if (this.svcVk) this.svcVk.aborted = true;
+    if (this.web) this.web.aborted = true;
     this.cancelled = true;
   }
 
@@ -100,7 +115,7 @@ class SyncEngine extends EventEmitter {
     }
   }
 
-  async run({ sourceIds = null } = {}) {
+  async run({ postIds = null } = {}) {
     if (this.running) throw new VkError('busy', 'Обновление уже идёт');
     this.running = true;
     this.cancelled = false;
@@ -128,70 +143,31 @@ class SyncEngine extends EventEmitter {
       if (!(await VkClient.online())) throw new VkError('network', 'Нет подключения к интернету. Ранее загруженные публикации доступны как обычно.');
       await vk.call('users.get', { user_ids: 1 }); // проверка ключа доступа
 
-
       for (const p of postsDoc.posts) p.is_new = false;
 
-      // ---------- 4. публикации источников ----------
-      const sources = settings.sources.filter((s) => s.enabled !== false && (!sourceIds || sourceIds.includes(s.id)));
-      const max = Number(settings.sync.max_posts) || 0;
-      const since = Number(settings.sync.since_days) > 0 ? Date.now() / 1000 - settings.sync.since_days * 86400 : 0;
-      for (const src of sources) {
-        if (this.cancelled) break;
-        this.phase('wall', `Загружаю публикации: ${src.name}`, max || 0);
-        let offset = 0;
-        let got = 0;
-        let total = Infinity;
-        try {
-          while (offset < total && (!max || got < max)) {
-            const count = Math.min(100, max ? max - got : 100);
-            const res = await vk.call('wall.get', { owner_id: src.owner_id, offset, count, filter: 'all' });
-            total = res.count;
-            if (!max) this.state.total = total;
-            const items = res.items || [];
-            if (!items.length) break;
-            let tooOld = false;
-            for (const item of items) {
-              offset++;
-              if (since && item.date < since) {
-                if (!item.is_pinned) tooOld = true;
-                continue;
-              }
-              got++;
-              this.ingest(item, src, byId, postsDoc, deletedIds, touched, updatedPosts, conflictPosts);
-              this.tick();
-            }
-            src.last_synced = Date.now();
-            src.total_on_wall = total;
-            this.checkpoint();
-            if (tooOld) break;
-          }
-        } catch (e) {
-          if (e.code === 'auth' || e.code === 'aborted') throw e;
-          softError(`Источник «${src.name}»`, e);
-          src.last_error = e.message;
-        }
-        if (!this.state.errors.find((x) => x.where.includes(src.name))) src.last_error = '';
-      }
-
-      // ---------- 5. остальные публикации библиотеки ----------
-      const rest = postsDoc.posts.filter((p) => !touched.has(p.id));
-      if (rest.length && !this.cancelled) {
-        this.phase('recheck', 'Проверяю остальные публикации', rest.length);
-        for (let i = 0; i < rest.length && !this.cancelled; i += 100) {
-          const chunk = rest.slice(i, i + 100);
+      // ---------- 3. мои посты ----------
+      // Проверяются только посты, добавленные вручную (никаких стен сообществ).
+      const list = postIds ? postsDoc.posts.filter((p) => postIds.includes(p.id)) : postsDoc.posts;
+      if (list.length && !this.cancelled) {
+        this.phase('recheck', 'Проверяю посты', list.length);
+        const fetcher = new PostFetcher(vk, this.log);
+        for (let i = 0; i < list.length && !this.cancelled; i += 100) {
+          const chunk = list.slice(i, i + 100);
           try {
-            const res = await vk.call('wall.getById', { posts: chunk.map((p) => `${p.owner_id}_${p.post_id}`).join(',') });
-            const items = Array.isArray(res) ? res : res.items || [];
+            const { found: hits, names } = await fetcher.fetch(chunk.map((p) => ({ owner_id: p.owner_id, post_id: p.post_id, hint: p.wall_offset })));
             const found = new Set();
-            for (const item of items) {
-              const id = M.postId(item.owner_id, item.id);
+            for (const [id, { item, offset }] of hits) {
               found.add(id);
-              const src = settings.sources.find((s) => s.owner_id === item.owner_id) || { id: null };
-              this.ingest(item, src, byId, postsDoc, deletedIds, touched, updatedPosts, conflictPosts);
+              this.ingest(item, byId, postsDoc, deletedIds, touched, updatedPosts, conflictPosts);
+              const p = byId.get(id);
+              if (!p) continue;
+              if (names[item.owner_id]) p.owner_name = names[item.owner_id];
+              if (Number.isFinite(offset)) p.wall_offset = offset;
+              if (p.vk_missing) p.vk_missing = 0; // снова нашёлся
             }
             for (const p of chunk) {
               if (!found.has(p.id) && !p.vk_missing) {
-                p.vk_missing = Date.now(); // в VK не найдена — но из библиотеки НЕ удаляем
+                p.vk_missing = Date.now(); // в VK не найден — но из «Моих постов» НЕ удаляем
                 this.state.missing++;
                 p.last_checked = Date.now();
                 p.history = p.history || [];
@@ -200,7 +176,7 @@ class SyncEngine extends EventEmitter {
             }
           } catch (e) {
             if (e.code === 'auth' || e.code === 'aborted') throw e;
-            softError('Проверка публикаций', e);
+            softError('Проверка постов', e);
           }
           this.tick(chunk.length);
           this.checkpoint();
@@ -213,31 +189,84 @@ class SyncEngine extends EventEmitter {
       );
       this.phase('likes', 'Собираю, кто поставил лайки', needLikes.length);
       const now = Date.now();
+      // Откуда берём списки лайков: VK API (likes.getList) → сервисный ключ (если указан) → страница «Оценили» на vk.com.
+      // У приложений VK ID likes.getList закрыт для всех ключей (код 1051), поэтому обычно работает только vk.com.
+      const svcToken = needLikes.length && this.getServiceToken ? await this.getServiceToken() : null;
+      this.svcVk = svcToken ? new VkClient({ getToken: async () => svcToken, log: this.log }) : null;
+      this.web = needLikes.length && this.webLikes ? this.webLikes() : null;
+      const ways = ['api', ...(this.svcVk ? ['svc'] : []), ...(this.web ? ['web'] : [])];
+      let way = 0;
+      const apiLikers = async (client, p) => {
+        const ids = [];
+        let offset = 0;
+        let total = Infinity;
+        while (offset < total) {
+          const res = await client.call('likes.getList', { type: 'post', owner_id: p.owner_id, item_id: p.post_id, filter: 'likes', count: 1000, offset, skip_own: 0 });
+          total = res.count;
+          const items = res.items || [];
+          ids.push(...items);
+          offset += 1000;
+          if (!items.length) break;
+        }
+        return ids;
+      };
+      const getLikers = async (p) => {
+        for (;;) {
+          const w = ways[way];
+          try {
+            if (w === 'web') {
+              const list = await this.web.list(p.owner_id, p.post_id, p.likes_count);
+              const ids = await likersToIds(vk, list);
+              return { ids, partial: list.partial, guest: list.guest };
+            }
+            return { ids: await apiLikers(w === 'svc' ? this.svcVk : vk, p) };
+          } catch (e) {
+            if (e.code !== 'unsupported' || way >= ways.length - 1) throw e;
+            way++; // этот способ VK закрыл — до конца обновления пользуемся следующим
+            this.log('info', `likes.getList недоступен (${w === 'svc' ? 'сервисный ключ' : 'ключ VK ID'}, код 1051) — ${ways[way] === 'web' ? 'беру списки лайков со страницы vk.com' : 'пробую сервисный ключ приложения'}`);
+          }
+        }
+      };
+      const partialPosts = [];
+      let partialGuest = false;
       for (const p of needLikes) {
         if (this.cancelled) break;
         try {
-          const ids = [];
-          let offset = 0;
-          let total = Infinity;
-          while (offset < total) {
-            const res = await vk.call('likes.getList', { type: 'post', owner_id: p.owner_id, item_id: p.post_id, filter: 'likes', count: 1000, offset, skip_own: 0 });
-            total = res.count;
-            const items = res.items || [];
-            ids.push(...items);
-            offset += 1000;
-            if (!items.length) break;
+          const { ids, partial, guest } = await getLikers(p);
+          if (partial) {
+            partialPosts.push(p.id);
+            if (guest) partialGuest = true;
           }
-          const r = M.applyLikers(p, ids, now);
+          const r = M.applyLikers(p, ids, now, { partial });
           if (r.added || r.removed) {
             this.state.likesChanged++;
             updatedPosts.add(p.id);
           }
         } catch (e) {
           if (e.code === 'auth' || e.code === 'aborted') throw e;
-          softError(`Лайки публикации ${p.id}`, e);
+          if (e.code === 'unsupported') {
+            // одна понятная ошибка вместо сотни одинаковых, остальные публикации не мучаем
+            softError('Лайки', {
+              code: 'unsupported',
+              message: 'ВКонтакте не отдаёт списки лайков для этого приложения (likes.getList, код 1051). Посты и фото загружены, списки лайков не обновлены.',
+            });
+            break;
+          }
+          if (e.code === 'access' && ways[way] === 'svc') {
+            softError(`Лайки поста ${p.id}`, { code: 'access', message: 'Сервисный ключ видит только открытые посты — этот пост или страница закрыты.' });
+          } else softError(`Лайки поста ${p.id}`, e);
         }
         this.tick();
         this.checkpoint();
+      }
+
+      if (partialPosts.length) {
+        softError('Лайки', {
+          code: 'partial',
+          message: partialGuest
+            ? `Без входа на vk.com ВКонтакте показывает только первых ~350 лайкнувших (постов с неполным списком: ${partialPosts.length}). Войдите на vk.com: «Настройки» → «Списки лайков». Уже известные лайки сохранены.`
+            : `ВКонтакте показал не всех, кто лайкнул (постов с неполным списком: ${partialPosts.length}). Уже известные лайки сохранены.`,
+        });
       }
 
       // ---------- 7. профили ----------
@@ -285,11 +314,12 @@ class SyncEngine extends EventEmitter {
       } catch (_) {}
       this.running = false;
       this.vk = null;
+      this.svcVk = null;
       this.emit('done', report);
     }
   }
 
-  ingest(item, src, byId, postsDoc, deletedIds, touched, updatedPosts, conflictPosts) {
+  ingest(item, byId, postsDoc, deletedIds, touched, updatedPosts, conflictPosts) {
     const id = M.postId(item.owner_id, item.id);
     if (deletedIds.has(id)) return; // удалена пользователем — не возвращаем
     const fresh = freshFromItem(item);
@@ -297,7 +327,7 @@ class SyncEngine extends EventEmitter {
     let p = byId.get(id);
     this.state.checked++;
     if (!p) {
-      p = M.newPost({ ownerId: item.owner_id, id: item.id, sourceId: src.id, text: fresh.text, date: fresh.date, photos: fresh.photos, likes: fresh.likes_count, reposts: fresh.reposts, views: fresh.views, comments: fresh.comments, now });
+      p = M.newPost({ ownerId: item.owner_id, id: item.id, text: fresh.text, date: fresh.date, photos: fresh.photos, likes: fresh.likes_count, reposts: fresh.reposts, views: fresh.views, comments: fresh.comments, now });
       postsDoc.posts.push(p);
       byId.set(id, p);
       this.state.created++;
@@ -305,7 +335,6 @@ class SyncEngine extends EventEmitter {
       const r = M.applyVk(p, fresh, now);
       if (r.changed) updatedPosts.add(id);
       if (r.conflictFields.length) conflictPosts.add(id);
-      if (!p.source_id && src.id) p.source_id = src.id;
     }
     touched.add(id);
   }
@@ -464,4 +493,4 @@ class SyncEngine extends EventEmitter {
   }
 }
 
-module.exports = { SyncEngine, download };
+module.exports = { SyncEngine, download, freshFromItem, ownerNames };

@@ -60,13 +60,14 @@ for (let i = 0; i < 420; i++) {
   users[id] = { id, type: 'user', first_name: pick(FIRST), last_name: pick(LAST), city: pick(CITIES), photo_100: '', url: `https://vk.com/id${id}`, is_closed: rnd() < 0.2, updated_at: Date.now(), first_seen: Date.now() - Math.floor(rnd() * 60) * 86400e3 };
 }
 
-// источники
+// стены, на которых лежат демо-посты
 const settings = store.get('settings.json');
-settings.sources = [
-  { id: 'sA', owner_id: -1001, type: 'group', name: 'Кукольная мастерская', screen_name: 'club1001', url: 'https://vk.com/club1001', added_at: Date.now(), enabled: true, last_synced: Date.now() - 3600e3 },
-  { id: 'sB', owner_id: -1002, type: 'group', name: 'Одежда для Барби своими руками', screen_name: 'club1002', url: 'https://vk.com/club1002', added_at: Date.now(), enabled: true, last_synced: Date.now() - 3600e3 },
-  { id: 'sC', owner_id: 5005, type: 'user', name: 'Светлана Шьёт', screen_name: 'id5005', url: 'https://vk.com/id5005', added_at: Date.now(), enabled: true, last_synced: Date.now() - 3600e3 },
+const WALLS = [
+  { owner_id: -1001, name: 'Кукольная мастерская' },
+  { owner_id: -1002, name: 'Одежда для Барби своими руками' },
+  { owner_id: 5005, name: 'Светлана Шьёт' },
 ];
+const TITLES = ['Платье для Паолы', 'Весенний комплект', 'Шляпка с лентой', '', 'Пальто на осень', 'Вязаный свитер'];
 settings.vk.account = { id: 1, name: 'Демо-аккаунт', photo: '', kind: 'user' };
 settings.onboarding_done = process.env.DEMO_ONBOARD ? false : true;
 
@@ -75,7 +76,7 @@ const posts = store.get('posts.json').posts;
 const now = Date.now();
 const weights = uids.map((_, i) => 1 / (1 + i * 0.05)); // одни активнее других
 for (let i = 0; i < N; i++) {
-  const src = settings.sources[i % 3];
+  const src = WALLS[i % 3];
   const nPhotos = rnd() < 0.12 ? 0 : 1 + Math.floor(rnd() * 3);
   const photos = [];
   for (let k = 0; k < nPhotos; k++) {
@@ -84,7 +85,8 @@ for (let i = 0; i < N; i++) {
     fs.writeFileSync(store.photoPath(file), svgPhoto(i * 3 + k));
     photos.push({ key, url: '', width: 800, height: 900, file, thumb: null });
   }
-  const p = M.newPost({ ownerId: src.owner_id, id: 500 + i, sourceId: src.id, text: TEXTS[i % TEXTS.length], date: Math.floor(now / 1000) - i * 86400 * 0.7 - Math.floor(rnd() * 40000), photos, likes: 0, now: now - (N - i) * 1000 });
+  const p = M.newPost({ ownerId: src.owner_id, id: 500 + i, title: TITLES[i % TITLES.length], text: TEXTS[i % TEXTS.length], date: Math.floor(now / 1000) - i * 86400 * 0.7 - Math.floor(rnd() * 40000), photos, likes: 0, now: now - (N - i) * 1000 });
+  p.owner_name = src.name;
   p.is_new = i < 5;
   const likers = [];
   uids.forEach((u, j) => {

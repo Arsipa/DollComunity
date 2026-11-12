@@ -165,6 +165,20 @@ export function toast(text, { error = false, action, onAction, timeout = 4200 } 
 export const toastError = (e) => toast(e?.message || String(e), { error: true, timeout: 6500 });
 
 // ---------- окна ----------
+// ---------- слои: окна (.overlay) и боковые панели (.drawer-wrap) ----------
+// Новое окно или панель всегда поверх уже открытых (в каком бы порядке их ни открывали),
+// а Esc закрывает только самое верхнее.
+const LAYERS = '.overlay, .drawer-wrap';
+const openLayers = () => [...document.querySelectorAll(LAYERS)];
+const isTopLayer = (el) => {
+  const all = openLayers();
+  return all[all.length - 1] === el;
+};
+function pushLayer(el) {
+  el.style.zIndex = String(50 + openLayers().length); // 50, 51, 52… — выше всех уже открытых
+  document.body.append(el);
+}
+
 export function modal({ title, body, foot = '', cls = '', onClose, raw = false }) {
   const ov = html(`<div class="overlay"><div class="modal ${cls}">${
     raw
@@ -177,7 +191,7 @@ export function modal({ title, body, foot = '', cls = '', onClose, raw = false }
     onClose && onClose();
   };
   const onKey = (e) => {
-    if (e.key === 'Escape' && document.querySelector('.overlay:last-of-type') === ov) close();
+    if (e.key === 'Escape' && isTopLayer(ov)) close();
   };
   ov.addEventListener('mousedown', (e) => {
     if (e.target === ov) close();
@@ -186,7 +200,7 @@ export function modal({ title, body, foot = '', cls = '', onClose, raw = false }
     if (e.target.closest('[data-close]')) close();
   });
   document.addEventListener('keydown', onKey);
-  document.body.append(ov);
+  pushLayer(ov);
   return { el: ov.firstElementChild, close };
 }
 
@@ -208,8 +222,10 @@ export function confirmDialog({ title, text, ok = 'Да', cancel = 'Отмена
 }
 
 export function drawer({ title, tools = '', body = '', headExtra = '' }) {
-  const wrap = html(`<div class="drawer-wrap"><div class="drawer">
-    <div class="drawer-head">${headExtra}<h3>${title}</h3><button class="btn ghost icon-only sm" data-close title="Закрыть">${icon('close')}</button></div>
+  // панель открыта поверх другой (например, карточка человека из списка лайков) — даём вернуться назад
+  const back = openLayers().length ? `<button class="btn ghost sm drawer-back" data-close title="Вернуться назад">${icon('chevL')} Назад</button>` : '';
+  const wrap = html(`<div class="drawer-wrap ${back ? 'stacked' : ''}"><div class="drawer">
+    <div class="drawer-head">${back}${headExtra}<h3>${title}</h3><button class="btn ghost icon-only sm" data-close title="Закрыть">${icon('close')}</button></div>
     ${tools ? `<div class="drawer-tools">${tools}</div>` : ''}
     <div class="drawer-body">${body}</div></div></div>`);
   const close = () => {
@@ -217,7 +233,7 @@ export function drawer({ title, tools = '', body = '', headExtra = '' }) {
     document.removeEventListener('keydown', onKey);
   };
   const onKey = (e) => {
-    if (e.key === 'Escape' && !document.querySelector('.overlay')) close();
+    if (e.key === 'Escape' && isTopLayer(wrap)) close();
   };
   wrap.addEventListener('mousedown', (e) => {
     if (e.target === wrap) close();
@@ -226,7 +242,7 @@ export function drawer({ title, tools = '', body = '', headExtra = '' }) {
     if (e.target.closest('[data-close]')) close();
   });
   document.addEventListener('keydown', onKey);
-  document.body.append(wrap);
+  pushLayer(wrap);
   return { el: wrap.querySelector('.drawer'), body: wrap.querySelector('.drawer-body'), close };
 }
 
@@ -276,4 +292,142 @@ export function wordDiff(a, b) {
   while (i < n) outA += `<del>${esc(A[i++])}</del>`;
   while (j < m) outB += `<ins>${esc(B[j++])}</ins>`;
   return { a: outA, b: outB };
+}
+
+// ---------- красивые выпадающие списки ----------
+// Нативный <select class="select"> остаётся в разметке (скрытым): экраны работают с ним как раньше —
+// читают .value и слушают change. Поверх рисуется кнопка и всплывающий список в стиле приложения.
+const CHEVRON = '<svg class="dd-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+const TICK = '<svg class="dd-tick" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+const valueDesc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+let openDd = null;
+
+function closeDropdown() {
+  if (!openDd) return;
+  const d = openDd;
+  openDd = null;
+  d.list.remove();
+  d.wrap.classList.remove('open');
+  document.removeEventListener('mousedown', d.onDown, true);
+  document.removeEventListener('keydown', d.onKey, true);
+  window.removeEventListener('resize', closeDropdown);
+  window.removeEventListener('scroll', d.onScroll, true);
+}
+
+export function enhanceSelect(sel) {
+  if (sel.dataset.enhanced) return;
+  sel.dataset.enhanced = '1';
+  const wrap = document.createElement('div');
+  wrap.className = 'dd';
+  if (sel.style.cssText) wrap.style.cssText = sel.style.cssText;
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.append(sel);
+  sel.tabIndex = -1;
+  sel.setAttribute('aria-hidden', 'true');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'dd-btn';
+  if (sel.title) btn.title = sel.title;
+  if (sel.id) btn.dataset.for = sel.id;
+  wrap.append(btn);
+  const sync = () => {
+    const o = sel.options[sel.selectedIndex];
+    btn.innerHTML = `<span class="dd-val">${esc(o ? o.text : '')}</span>${CHEVRON}`;
+    btn.disabled = sel.disabled;
+  };
+  // sel.value = '…' из кода экрана тоже должно обновлять кнопку
+  Object.defineProperty(sel, 'value', {
+    configurable: true,
+    get() {
+      return valueDesc.get.call(this);
+    },
+    set(v) {
+      valueDesc.set.call(this, v);
+      sync();
+    },
+  });
+  sel.addEventListener('change', sync);
+  sync();
+
+  const choose = (i) => {
+    closeDropdown();
+    btn.focus();
+    if (i === sel.selectedIndex) return;
+    sel.selectedIndex = i;
+    sync();
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+
+  const open = () => {
+    if (openDd && openDd.wrap === wrap) return closeDropdown();
+    closeDropdown();
+    const list = document.createElement('div');
+    list.className = 'dd-list';
+    list.setAttribute('role', 'listbox');
+    list.innerHTML = [...sel.options].map((o, i) => `<div class="dd-opt ${i === sel.selectedIndex ? 'on' : ''}" role="option" data-i="${i}">${TICK}<span>${esc(o.text)}</span></div>`).join('');
+    document.body.append(list);
+    const r = btn.getBoundingClientRect();
+    list.style.minWidth = `${r.width}px`;
+    const h = list.offsetHeight;
+    const below = window.innerHeight - r.bottom - 12;
+    list.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - list.offsetWidth - 12))}px`;
+    list.style.top = below < h && r.top > h ? `${r.top - h - 6}px` : `${r.bottom + 6}px`;
+    wrap.classList.add('open');
+    let active = sel.selectedIndex;
+    const mark = () => list.querySelectorAll('.dd-opt').forEach((el, i) => el.classList.toggle('active', i === active));
+    mark();
+    list.addEventListener('mousemove', (e) => {
+      const o = e.target.closest('.dd-opt');
+      if (o && Number(o.dataset.i) !== active) {
+        active = Number(o.dataset.i);
+        mark();
+      }
+    });
+    list.addEventListener('click', (e) => {
+      const o = e.target.closest('.dd-opt');
+      if (o) choose(Number(o.dataset.i));
+    });
+    openDd = {
+      wrap,
+      list,
+      onDown: (e) => {
+        if (!list.contains(e.target) && !wrap.contains(e.target)) closeDropdown();
+      },
+      onScroll: (e) => {
+        if (!list.contains(e.target)) closeDropdown();
+      },
+      onKey: (e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          closeDropdown();
+          btn.focus();
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          active = (active + (e.key === 'ArrowDown' ? 1 : -1) + sel.options.length) % sel.options.length;
+          mark();
+        } else if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          choose(active);
+        } else if (e.key === 'Tab') closeDropdown();
+      },
+    };
+    document.addEventListener('mousedown', openDd.onDown, true);
+    document.addEventListener('keydown', openDd.onKey, true);
+    window.addEventListener('resize', closeDropdown);
+    window.addEventListener('scroll', openDd.onScroll, true);
+  };
+  btn.addEventListener('click', open);
+  btn.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      open();
+    }
+  });
+}
+
+/** Подключить красивые списки ко всем select.select — и к тем, что появятся позже */
+export function autoEnhanceSelects() {
+  const run = () => document.querySelectorAll('select.select:not([data-enhanced])').forEach(enhanceSelect);
+  run();
+  new MutationObserver(run).observe(document.body, { childList: true, subtree: true });
 }

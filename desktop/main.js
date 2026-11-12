@@ -6,7 +6,9 @@ const path = require('path');
 const { Readable } = require('stream');
 const { Store, stamp } = require('./storage');
 const { SyncEngine } = require('./sync');
-const { VkClient, parseSourceInput } = require('./vk');
+const { VkClient } = require('./vk');
+const { WebLikes } = require('./weblikes');
+const { addPost, setTitle, trashAll, clearTrash, removeUnusedPhotos } = require('./posts');
 const M = require('./model');
 const vkid = require('./vkid');
 
@@ -43,6 +45,7 @@ if (!app.requestSingleInstanceLock()) {
 
 const CONFIG_FILE = () => path.join(app.getPath('userData'), 'config.json');
 const TOKEN_FILE = () => path.join(app.getPath('userData'), 'secure', 'vk-token.bin');
+const SERVICE_FILE = () => path.join(app.getPath('userData'), 'secure', 'vk-service.bin');
 const defaultRoot = () => (DEV_TEST ? path.join(process.env.VKD_TEST_ROOT, 'library') : path.join(app.getPath('appData'), APP_NAME));
 
 function readConfig() {
@@ -117,6 +120,30 @@ function loadSession() {
   }
 }
 const hasToken = () => !!loadSession();
+
+// Сервисный ключ приложения VK — только для списков лайков (ключ VK ID их не получает, код 1051).
+let memService = null;
+function saveServiceKey(key) {
+  memService = key || null;
+  if (!key) {
+    fs.rmSync(SERVICE_FILE(), { force: true });
+    return { secure: true };
+  }
+  if (!safeStorage.isEncryptionAvailable()) return { secure: false };
+  fs.mkdirSync(path.dirname(SERVICE_FILE()), { recursive: true });
+  fs.writeFileSync(SERVICE_FILE() + '.tmp', safeStorage.encryptString(key));
+  fs.renameSync(SERVICE_FILE() + '.tmp', SERVICE_FILE());
+  return { secure: true };
+}
+function loadServiceKey() {
+  if (memService) return memService;
+  try {
+    memService = safeStorage.decryptString(fs.readFileSync(SERVICE_FILE()));
+    return memService;
+  } catch (_) {
+    return null;
+  }
+}
 
 let refreshing = null;
 /** Продление ключа VK ID (одно на всех, даже если запросов много одновременно) */
@@ -348,7 +375,7 @@ function snapshotForUi() {
     users: store.get('users.json').users,
     deleted: store.get('deleted_posts.json').deleted,
     history: { runs: hist.runs.slice(0, 30), snapshots: hist.snapshots, last_sync: hist.last_sync || 0 },
-    account: { connected: hasToken(), info: store.get('settings.json').vk.account },
+    account: { connected: hasToken(), info: store.get('settings.json').vk.account, serviceKey: !!loadServiceKey() },
     paths: { root: store.root },
     problems,
     blocked: [...store.blocked.keys()],
@@ -360,7 +387,7 @@ function snapshotForUi() {
 let engine;
 function getEngine() {
   if (!engine) {
-    engine = new SyncEngine({ store, getToken: getAccessToken, refreshToken: refreshSession, log, makeThumb });
+    engine = new SyncEngine({ store, getToken: getAccessToken, refreshToken: refreshSession, getServiceToken: async () => loadServiceKey(), webLikes: () => new WebLikes({ log, fetch: webFetch }), log, makeThumb });
     let lastPush = 0;
     engine.on('progress', (p) => {
       send('sync:progress', p);
@@ -411,6 +438,75 @@ function vkIdLoginWindow({ clientId, redirectUri, scope }) {
     log('info', `VK ID: открываю вход (client_id=${clientId}, redirect=${redirectUri}, scope=${scope || '—'})`);
     w.loadURL(vkid.buildAuthUrl({ clientId, redirectUri, scope, state, challenge }));
   }).then((r) => vkid.exchangeCode({ clientId, redirectUri, code: r.code, deviceId: r.deviceId, verifier, state: r.state || state }));
+}
+
+// ---------- вход на vk.com — для страницы «Оценили» (списки лайков) ----------
+// Приложениям VK ID ВКонтакте не отдаёт likes.getList (код 1051), поэтому списки лайков читаются со страницы m.vk.ru.
+// Без входа она показывает только первые ~350 человек. Куки входа живут в отдельном разделе persist:vkweb;
+// пароль вводится на странице ВКонтакте, программа его не видит.
+const WEB_PART = 'persist:vkweb';
+const AJAX = { method: 'POST', body: '_ajax=1', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'include' };
+let webSes = null;
+function vkWebSession() {
+  if (!webSes) {
+    webSes = session.fromPartition(WEB_PART);
+    // VK не любит «Electron» в User-Agent — представляемся обычным Chrome
+    webSes.setUserAgent(webSes.getUserAgent().replace(/\s(Electron|vk-doll-community|VK Doll Community)\/\S+/gi, ''));
+  }
+  return webSes;
+}
+const webFetch = (url, opts) => vkWebSession().fetch(url, { credentials: 'include', ...opts });
+
+async function vkWebStatus() {
+  try {
+    // лента есть только у вошедших: гостя VK отправляет на login.vk.ru ({"location":"https://login.vk.ru/..."})
+    const r = await webFetch('https://m.vk.ru/feed', AJAX);
+    const j = await r.json();
+    if (typeof j.html === 'string') return { loggedIn: !/UnauthorizedHeader|basis__header_unauthorized/.test(j.html) };
+    if (typeof j.location === 'string') return { loggedIn: !/login|\/join|act=auth/i.test(j.location) };
+    return { loggedIn: false };
+  } catch (e) {
+    return { loggedIn: false, offline: true };
+  }
+}
+
+function vkWebLoginWindow() {
+  const ses = vkWebSession();
+  return new Promise((resolve) => {
+    const w = new BrowserWindow({ width: 480, height: 760, parent: win, modal: true, title: 'Вход на vk.com', autoHideMenuBar: true, webPreferences: { partition: WEB_PART, sandbox: true } });
+    w.webContents.setUserAgent(ses.getUserAgent());
+    let done = false;
+    let checking = false;
+    const finish = (val) => {
+      if (done) return;
+      done = true;
+      setImmediate(() => !w.isDestroyed() && w.destroy());
+      resolve(val);
+    };
+    const check = async (u) => {
+      if (done || checking) return;
+      let url;
+      try {
+        url = new URL(u);
+      } catch (_) {
+        return;
+      }
+      if (!/(^|\.)vk\.(ru|com)$/.test(url.hostname) || /^(id|login|oauth)\./.test(url.hostname) || url.pathname.startsWith('/login')) return;
+      checking = true;
+      const st = await vkWebStatus();
+      checking = false;
+      if (st.loggedIn) {
+        log('info', 'vk.com: вход выполнен');
+        finish(st);
+      }
+    };
+    attachEditMenu(w.webContents);
+    w.webContents.setWindowOpenHandler(() => ({ action: 'allow', overrideBrowserWindowOptions: { parent: w, autoHideMenuBar: true, webPreferences: { partition: WEB_PART, sandbox: true } } }));
+    w.webContents.on('did-navigate', (_e, u) => check(u));
+    w.webContents.on('did-navigate-in-page', (_e, u) => check(u));
+    w.on('closed', () => vkWebStatus().then(finish));
+    w.loadURL('https://m.vk.ru/login');
+  });
 }
 
 async function fetchAccount() {
@@ -480,7 +576,8 @@ function registerIpc() {
     const { width, height } = img.getSize();
     return { key, file, thumb: file, width, height, local: true };
   });
-  h('posts:delete', (ids) => {
+  h('posts:delete', (ids) => trashPosts(ids));
+  function trashPosts(ids) {
     const del = store.get('deleted_posts.json');
     const list = posts();
     const now = Date.now();
@@ -495,7 +592,7 @@ function registerIpc() {
     store.writeNow('posts.json');
     store.save('users.json');
     return true;
-  });
+  }
   h('trash:restore', (ids) => {
     const del = store.get('deleted_posts.json');
     const list = posts();
@@ -516,17 +613,28 @@ function registerIpc() {
     return true;
   });
   h('trash:forget', async (ids) => {
-    // «Удалить навсегда»: запись остаётся в списке удалённых (чтобы синхронизация её не вернула), но без содержимого
+    // «Удалить навсегда»: посты добавляются только вручную, так что запись убираем целиком
     const del = store.get('deleted_posts.json');
-    for (const d of del.deleted) {
-      if (ids.includes(d.id) && d.post) {
-        d.title = (M.effective(d.post, 'text') || '').slice(0, 120);
-        d.post = null;
-        d.forgotten = true;
-      }
-    }
+    const removed = del.deleted.filter((d) => ids.includes(d.id));
+    del.deleted = del.deleted.filter((d) => !ids.includes(d.id));
     store.writeNow('deleted_posts.json');
+    await removeUnusedPhotos(store, removed.map((d) => d.post).filter(Boolean));
     return true;
+  });
+  const notWhileSync = () => {
+    if (engine && engine.running) throw new Error('Дождитесь окончания обновления данных и попробуйте снова.');
+  };
+  h('trash:clear', async () => {
+    notWhileSync();
+    const n = await clearTrash(store);
+    log('info', `Корзина очищена: ${n}`);
+    return n;
+  });
+  h('posts:trash-all', () => {
+    notWhileSync();
+    const n = trashAll(store);
+    log('info', `Все посты перемещены в корзину: ${n}`);
+    return n;
   });
   h('trash:allow-return', (ids) => {
     // убрать из списка удалённых совсем — публикация сможет вернуться при следующем обновлении
@@ -536,50 +644,20 @@ function registerIpc() {
     return true;
   });
 
-  // ---- источники ----
-  h('source:resolve', async (input) => {
-    const parsed = parseSourceInput(input);
-    if (!parsed) throw new Error('Не получилось разобрать ссылку. Скопируйте адрес страницы из браузера, например https://vk.com/club123');
+  // ---- мои посты ----
+  h('post:add', async (input, title) => {
     if (!hasToken()) throw new Error('Сначала подключите ВКонтакте в настройках.');
-    const vk = vkClient();
-    let kind = parsed.kind;
-    let id = parsed.id;
-    if (kind === 'screen') {
-      const r = await vk.call('utils.resolveScreenName', { screen_name: parsed.name });
-      if (!r || Array.isArray(r) || !r.object_id) throw new Error('Такая страница ВКонтакте не найдена.');
-      kind = r.type === 'user' ? 'user' : 'group';
-      id = r.object_id;
-    }
-    if (kind === 'user') {
-      const [u] = await vk.call('users.get', { user_ids: id, fields: 'photo_100,screen_name,is_closed' });
-      if (!u) throw new Error('Страница не найдена');
-      return { owner_id: u.id, type: 'user', name: `${u.first_name} ${u.last_name}`, photo: u.photo_100, screen_name: u.screen_name || `id${u.id}`, closed: !!u.is_closed && !u.can_access_closed };
-    }
-    const res = await vk.call('groups.getById', { group_id: id, fields: 'members_count' });
-    const g = Array.isArray(res) ? res[0] : (res.groups || [])[0];
-    if (!g) throw new Error('Сообщество не найдено');
-    return { owner_id: -g.id, type: 'group', name: g.name, photo: g.photo_100, screen_name: g.screen_name || `club${g.id}`, closed: !!g.is_closed, members: g.members_count };
+    if (engine && engine.running) throw new Error('Дождитесь окончания обновления данных и попробуйте снова.');
+    const p = await addPost({ vk: vkClient(), store, input, title, log });
+    log('info', `Добавлен пост ${p.id}${p.title ? ` «${p.title}»` : ''}`);
+    return p;
   });
-  h('source:add', (src) => {
-    const s = store.get('settings.json');
-    if (s.sources.find((x) => x.owner_id === src.owner_id)) throw new Error('Этот источник уже добавлен');
-    const item = { id: 's' + Date.now().toString(36), owner_id: Number(src.owner_id), type: src.type, name: String(src.name || ''), photo: src.photo || '', screen_name: src.screen_name || '', url: `https://vk.com/${src.screen_name}`, added_at: Date.now(), enabled: true };
-    s.sources.push(item);
-    store.writeNow('settings.json');
-    return item;
-  });
-  h('source:update', (id, patch) => {
-    const s = store.get('settings.json');
-    const src = s.sources.find((x) => x.id === id);
-    if (src && typeof patch.enabled === 'boolean') src.enabled = patch.enabled;
-    store.writeNow('settings.json');
-    return src;
-  });
-  h('source:remove', (id) => {
-    const s = store.get('settings.json');
-    s.sources = s.sources.filter((x) => x.id !== id);
-    store.writeNow('settings.json');
-    return true; // публикации источника остаются в библиотеке
+  h('post:set-title', (id, title) => {
+    const p = findPost(id);
+    if (!p) throw new Error('Публикация не найдена');
+    setTitle(p, title);
+    store.save('posts.json');
+    return p;
   });
 
   // ---- настройки ----
@@ -656,6 +734,32 @@ function registerIpc() {
     s.vk.account = null;
     store.writeNow('settings.json');
     return true;
+  });
+  h('vk:set-service-key', async (key) => {
+    const k = String(key || '').trim();
+    if (k.length < 30 || /\s/.test(k)) throw new Error('Похоже, это не сервисный ключ: он длинный, без пробелов, из латинских букв и цифр.');
+    // проверяем ключ на безобидном запросе
+    const test = new VkClient({ getToken: async () => k, log });
+    try {
+      await test.call('users.get', { user_ids: 1 });
+    } catch (e) {
+      if (e.code === 'auth') throw new Error('ВКонтакте не принял этот ключ. Скопируйте «Сервисный ключ доступа» из настроек приложения ещё раз.');
+      throw e;
+    }
+    const r = saveServiceKey(k);
+    log('info', 'Сервисный ключ сохранён');
+    return r;
+  });
+  h('vk:clear-service-key', () => {
+    saveServiceKey(null);
+    return true;
+  });
+  h('vkweb:status', () => vkWebStatus());
+  h('vkweb:login', () => vkWebLoginWindow());
+  h('vkweb:logout', async () => {
+    await vkWebSession().clearStorageData();
+    log('info', 'vk.com: выход выполнен');
+    return { loggedIn: false };
   });
   h('vk:check', async () => {
     if (!(await VkClient.online())) return { online: false, connected: hasToken() };

@@ -30,14 +30,13 @@ contextBridge.exposeInMainWorld('api', {
   keepMine: call('post:keep-mine'),
   pickPhoto: call('post:pick-photo'),
   deletePosts: call('posts:delete'),
+  addPost: call('post:add'),
+  setPostTitle: call('post:set-title'),
   restorePosts: call('trash:restore'),
   forgetPosts: call('trash:forget'),
+  clearTrash: call('trash:clear'),
+  trashAllPosts: call('posts:trash-all'),
   allowReturn: call('trash:allow-return'),
-
-  resolveSource: call('source:resolve'),
-  addSource: call('source:add'),
-  updateSource: call('source:update'),
-  removeSource: call('source:remove'),
 
   updateSettings: call('settings:update'),
 
@@ -45,6 +44,11 @@ contextBridge.exposeInMainWorld('api', {
   vkSetToken: call('vk:set-token'),
   vkLogout: call('vk:logout'),
   vkCheck: call('vk:check'),
+  setServiceKey: call('vk:set-service-key'),
+  clearServiceKey: call('vk:clear-service-key'),
+  vkWebStatus: call('vkweb:status'),
+  vkWebLogin: call('vkweb:login'),
+  vkWebLogout: call('vkweb:logout'),
 
   syncStart: call('sync:start'),
   syncCancel: call('sync:cancel'),

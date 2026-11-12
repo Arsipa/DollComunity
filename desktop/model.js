@@ -45,12 +45,13 @@ function localChanges(post) {
   return fields;
 }
 
-function newPost({ ownerId, id, sourceId, text, date, photos, likes, reposts, views, comments, now }) {
+function newPost({ ownerId, id, title = '', text, date, photos, likes, reposts, views, comments, now }) {
   return {
     id: postId(ownerId, id),
     owner_id: ownerId,
     post_id: id,
-    source_id: sourceId,
+    title: title || '', // название, которое дал пользователь (не из VK)
+    owner_name: '',
     url: postUrl(ownerId, id),
     original: { text: text || '', date, photos: photos || [] },
     local: {},
@@ -118,14 +119,18 @@ function applyVk(post, fresh, now) {
   return { changed, conflictFields };
 }
 
-/** Обновление списка лайкнувших: сохраняем момент, когда приложение впервые увидело лайк */
-function applyLikers(post, ids, now) {
+/**
+ * Обновление списка лайкнувших: сохраняем момент, когда приложение впервые увидело лайк.
+ * partial: VK показал не всех — никого не убираем, список помечаем неполным.
+ */
+function applyLikers(post, ids, now, { partial = false } = {}) {
   const prev = post.likers || {};
-  const next = {};
+  const next = partial ? { ...prev } : {};
   let added = 0;
   let removed = 0;
   for (const id of ids) {
     if (prev[id]) next[id] = prev[id];
+    else if (next[id]) continue;
     else {
       next[id] = now;
       added++;
@@ -133,7 +138,7 @@ function applyLikers(post, ids, now) {
   }
   for (const id of Object.keys(prev)) if (!(id in next)) removed++;
   post.likers = next;
-  post.likers_complete = true;
+  post.likers_complete = !partial;
   post.likers_at = now;
   return { added, removed };
 }

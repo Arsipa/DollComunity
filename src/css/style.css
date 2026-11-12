@@ -218,6 +218,7 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
 .photo-count { position: absolute; right: 10px; bottom: 10px; background: rgba(40, 24, 36, 0.6); color: #fff; border-radius: 99px; font-size: 12px; font-weight: 800; padding: 2px 9px; display: flex; align-items: center; gap: 4px; backdrop-filter: blur(6px); }
 .photo-count .icon { width: 13px; height: 13px; }
 .card-body { padding: 14px 16px 6px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+.card-title { margin: 0 0 4px; font-size: 15.5px; font-weight: 850; color: var(--ink); line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-meta { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); font-weight: 700; min-width: 0; }
 .card-meta .src { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-text { margin: 0; color: var(--ink); font-size: 14.5px; white-space: pre-line; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
@@ -269,6 +270,9 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
 @keyframes slideIn { from { transform: translateX(40px); opacity: 0; } to { transform: none; opacity: 1; } }
 .drawer-head { padding: 20px 20px 12px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--line); }
 .drawer-head h3 { margin: 0; font-size: 18px; font-weight: 900; flex: 1; }
+.drawer-back { margin-left: -8px; }
+/* вторая панель поверх первой — фон не затемняем ещё раз */
+.drawer-wrap.stacked { background: transparent; }
 .drawer-tools { padding: 12px 20px; display: flex; gap: 8px; border-bottom: 1px solid var(--line); }
 .drawer-tools .search { flex: 1; }
 .drawer-body { flex: 1; overflow-y: auto; padding: 8px 12px 20px; }
@@ -284,7 +288,21 @@ textarea.input { height: auto; padding: 10px 12px; resize: vertical; line-height
 .g-thumbs { display: flex; gap: 8px; padding: 10px; overflow-x: auto; background: rgba(0,0,0,.25); }
 .g-thumbs img { width: 58px; height: 58px; object-fit: cover; border-radius: 10px; cursor: pointer; opacity: 0.55; border: 2px solid transparent; flex: none; }
 .g-thumbs img.on { opacity: 1; border-color: var(--pink); }
-.detail-side { padding: 22px 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
+.detail-side { padding: 22px 26px 26px; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; }
+.detail-side > .row:first-child { margin-bottom: -10px; }
+.d-head { display: flex; flex-direction: column; gap: 8px; }
+.d-title { margin: 0; font-size: 21px; font-weight: 900; line-height: 1.25; color: var(--ink); overflow-wrap: anywhere; }
+#d-tab { display: flex; flex-direction: column; gap: 22px; }
+.d-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 0; border-top: 2px dashed var(--line-2); border-bottom: 2px dashed var(--line-2); }
+.d-stat { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border-radius: 99px; background: var(--bg-2); color: var(--ink-2); font-weight: 700; font-size: 13.5px; }
+.d-stat .icon { width: 15px; height: 15px; }
+.d-likers { display: flex; flex-direction: column; gap: 12px; }
+.d-sub { display: flex; align-items: center; gap: 8px; font-weight: 850; font-size: 15px; }
+.d-sub .icon { color: var(--pink-deep); }
+.d-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 4px 8px; }
+.d-people .person { border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.d-likers > .btn { align-self: flex-start; }
+.d-foot { padding-top: 4px; }
 .detail-text { white-space: pre-line; overflow-wrap: anywhere; font-size: 15.5px; margin: 0; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .tabs { display: flex; gap: 4px; background: var(--bg-2); padding: 4px; border-radius: 12px; align-self: flex-start; }
@@ -489,3 +507,92 @@ details.more summary { cursor: pointer; font-weight: 750; color: var(--lav-deep)
 .tour-skip { background: none; border: 0; padding: 4px 0; color: var(--muted); font-weight: 700; font-size: 13px; cursor: pointer; }
 .tour-skip:hover { color: var(--ink-2); text-decoration: underline; }
 body.touring .card:hover { transform: none; }
+
+/* ---------- выпадающие списки (src/js/util.js → enhanceSelect) ---------- */
+.dd { position: relative; display: inline-flex; min-width: 0; }
+.dd > select.select { position: absolute; inset: 0; opacity: 0; pointer-events: none; width: 100%; height: 100%; }
+.dd-btn {
+  height: 40px; display: inline-flex; align-items: center; gap: 10px; width: 100%; min-width: 0;
+  padding: 0 12px 0 14px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--surface);
+  font: inherit; font-weight: 700; color: var(--ink); cursor: pointer; text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.dd-btn:hover { border-color: #dcc5cc; background: #fffafb; }
+.dd-btn:focus-visible, .dd.open .dd-btn { outline: none; border-color: var(--pink); box-shadow: 0 0 0 4px var(--pink-soft); }
+.dd-btn:disabled { background: var(--bg-2); color: var(--muted); cursor: not-allowed; }
+.dd-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-chev { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.18s; }
+.dd.open .dd-chev { transform: rotate(180deg); stroke: var(--pink-deep); }
+.dd-list {
+  position: fixed; z-index: 85; padding: 6px; max-height: 320px; overflow: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-lg);
+  animation: ddIn 0.14s ease-out;
+}
+@keyframes ddIn { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+.dd-opt { display: flex; align-items: center; gap: 8px; padding: 9px 14px 9px 8px; border-radius: 10px; font-weight: 700; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.dd-opt.active { background: var(--bg-2); color: var(--ink); }
+.dd-opt.on { color: var(--pink-deep); }
+.dd-opt.on.active { background: var(--pink-soft); }
+.dd-tick { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; visibility: hidden; }
+.dd-opt.on .dd-tick { visibility: visible; }
+
+/* ---------- слайдер фото в карточке ---------- */
+.card-photo .slides { display: flex; width: 100%; height: 100%; transition: transform 0.35s var(--ease); }
+.card-photo .slides img { flex: 0 0 100%; width: 100%; height: 100%; object-fit: cover; }
+.card:hover .card-photo .slides img { transform: none; }
+.s-nav {
+  position: absolute; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; border-radius: 50%; border: 0;
+  background: rgba(255, 255, 255, 0.92); color: var(--ink); display: grid; place-items: center; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(40, 24, 36, 0.22); opacity: 0; transition: opacity 0.2s, transform 0.2s; z-index: 2;
+}
+.s-nav .icon { width: 18px; height: 18px; }
+.s-nav.prev { left: 10px; } .s-nav.next { right: 10px; }
+.s-nav:hover { transform: translateY(-50%) scale(1.08); }
+.card:hover .s-nav, .s-nav:focus-visible { opacity: 1; }
+.s-dots { position: absolute; left: 0; right: 0; bottom: 12px; display: flex; justify-content: center; gap: 5px; pointer-events: none; }
+.s-dots span { width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.6); box-shadow: 0 0 0 1px rgba(40, 24, 36, 0.15); transition: width 0.2s, background 0.2s; }
+.s-dots span.on { width: 16px; border-radius: 99px; background: #fff; }
+
+/* ---------- карточка поста v2 ---------- */
+.card-photo { aspect-ratio: 1 / 1; }
+.card-badges { right: 120px; }
+.card-acts {
+  position: absolute; top: 10px; right: 10px; display: flex; gap: 6px; z-index: 3;
+  opacity: 0; transform: translateY(-4px); transition: opacity 0.2s, transform 0.2s var(--ease);
+}
+.card:hover .card-acts, .card-acts:focus-within { opacity: 1; transform: none; }
+.c-act {
+  width: 34px; height: 34px; border-radius: 50%; border: 0; display: grid; place-items: center; cursor: pointer;
+  background: rgba(255, 255, 255, 0.94); color: var(--ink-2); box-shadow: 0 4px 14px rgba(40, 24, 36, 0.18);
+  transition: transform 0.15s var(--ease), color 0.15s, background 0.15s;
+}
+.c-act .icon { width: 16px; height: 16px; }
+.c-act:hover { transform: scale(1.08); color: var(--pink-deep); }
+.c-act.danger:hover { color: #c0392b; background: #fff1f0; }
+.photo-count { gap: 5px; }
+.photo-count b { font-weight: 850; }
+.card-body { padding: 14px 16px 4px; gap: 9px; }
+.card-title { margin: 0; font-size: 16.5px; font-weight: 900; line-height: 1.3; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.card-text { font-size: 14px; color: var(--ink-2); line-height: 1.5; -webkit-line-clamp: 3; }
+.card-text.long { -webkit-line-clamp: 5; color: var(--ink); }
+.card-foot { padding: 10px 14px 14px; gap: 10px; border-top: 1px solid var(--line); margin-top: 8px; }
+.card-date { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 750; color: var(--muted); white-space: nowrap; }
+.card-date .icon { width: 15px; height: 15px; }
+
+/* плашка источника */
+.src-chip {
+  --c: var(--lav-deep); --bgc: var(--lav-soft);
+  align-self: flex-start; max-width: 100%; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px 0 3px;
+  border-radius: 99px; border: 0; background: var(--bgc); color: var(--c); font: inherit; font-size: 13px; font-weight: 850; cursor: pointer;
+  transition: filter 0.15s, transform 0.15s var(--ease);
+}
+.src-chip:hover { filter: brightness(0.97) saturate(1.15); transform: translateY(-1px); }
+.src-chip .src-ava { width: 24px; height: 24px; border-radius: 50%; background: var(--c); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 900; flex: none; }
+.src-chip .src-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.src-chip .icon { width: 14px; height: 14px; flex: none; opacity: 0.7; }
+.src-chip.blue { --c: var(--blue-deep); --bgc: var(--blue-soft); }
+.src-chip.mint { --c: var(--mint-deep); --bgc: var(--mint-soft); }
+.src-chip.amber { --c: var(--amber-deep); --bgc: var(--amber-soft); }
+.src-chip.pink { --c: var(--pink-deep); --bgc: var(--pink-soft); }
+.d-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+body.touring .card-acts { opacity: 1; transform: none; } /* в обучении кнопки карточки видны всегда */
