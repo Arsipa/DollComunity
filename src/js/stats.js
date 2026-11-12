@@ -4,7 +4,9 @@ import { icon, esc, $, $$, html, num, pl, fmtDate, fmtMs, photoSrc, avatar, user
 import { openUser } from './people.js';
 import { openPost } from './post.js';
 
-const SF = { period: 'all', basis: 'posts', q: '', sort: 'likes' };
+const SF = { period: 'all', basis: 'posts', q: '', sort: 'likes', dir: 'desc' };
+// направление по умолчанию при первом нажатии на заголовок
+const DEFAULT_DIR = { place: 'asc', name: 'asc', likes: 'desc', share: 'desc', last: 'desc' };
 
 function periodRange() {
   const now = Date.now();
@@ -64,8 +66,9 @@ export function renderStats() {
         </div>
         <table class="rank-table">
           <thead><tr>
-            <th style="width:54px">Место</th><th data-sort="name">Участник</th>
-            <th class="num" data-sort="likes">Лайки</th><th class="num" data-sort="share" title="Какой доле публикаций поставлен лайк">Публикаций</th><th style="width:40px"></th>
+            <th style="width:64px" data-sort="place" title="Сортировать по месту">Место</th><th data-sort="name" title="Сортировать по имени">Участник</th>
+            <th class="num" data-sort="likes" title="Сортировать по числу лайков">Лайки</th><th class="num" data-sort="share" title="Какой доле публикаций поставлен лайк">Публикаций</th>
+            <th class="num" data-sort="last" title="Когда лайк этого участника замечен в последний раз">Последний</th><th style="width:40px"></th>
           </tr></thead>
           <tbody id="s-rows"></tbody>
         </table>
@@ -88,7 +91,9 @@ export function renderStats() {
   $$('.rank-table th[data-sort]').forEach(
     (th) =>
       (th.onclick = () => {
-        SF.sort = th.dataset.sort;
+        const k = th.dataset.sort;
+        if (SF.sort === k) SF.dir = SF.dir === 'asc' ? 'desc' : 'asc';
+        else ((SF.sort = k), (SF.dir = DEFAULT_DIR[k] || 'desc'));
         drawRows(last);
       }),
   );
@@ -143,15 +148,26 @@ function drawRows(c) {
   let rows = ranked;
   const q = SF.q.trim().toLowerCase();
   if (q) rows = rows.filter((r) => userName(S.users[r.uid]).toLowerCase().includes(q));
+  // все сравнения — «по возрастанию»; для убывания переворачиваем
+  const nameOf = (r) => userName(S.users[r.uid] || { first_name: 'Участник', last_name: r.uid });
+  const byName = (a, b) => nameOf(a).localeCompare(nameOf(b), 'ru');
   const sorters = {
-    likes: (a, b) => b.likes - a.likes,
-    share: (a, b) => b.likes - a.likes,
-    name: (a, b) => userName(S.users[a.uid]).localeCompare(userName(S.users[b.uid]), 'ru'),
+    place: (a, b) => a.place - b.place || byName(a, b),
+    likes: (a, b) => a.likes - b.likes || byName(b, a),
+    share: (a, b) => a.likes - b.likes || byName(b, a),
+    last: (a, b) => a.last - b.last || byName(b, a),
+    name: byName,
   };
-  rows = [...rows].sort(sorters[SF.sort]);
-  $$('.rank-table th[data-sort]').forEach((th) => th.classList.toggle('sorted', th.dataset.sort === SF.sort));
+  const cmp = sorters[SF.sort] || sorters.likes;
+  const sign = SF.dir === 'asc' ? 1 : -1;
+  rows = [...rows].sort((a, b) => sign * cmp(a, b));
+  $$('.rank-table th[data-sort]').forEach((th) => {
+    const on = th.dataset.sort === SF.sort;
+    th.classList.toggle('sorted', on);
+    th.dataset.dir = on ? SF.dir : '';
+  });
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="5"><div class="list-empty">${c.rows.length ? 'Никого не нашли' : 'За этот период лайков нет. Попробуйте другой период или обновите данные.'}</div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6"><div class="list-empty">${c.rows.length ? 'Никого не нашли' : 'За этот период лайков нет. Попробуйте другой период или обновите данные.'}</div></td></tr>`;
     return;
   }
   const max = ranked[0].likes || 1;
@@ -169,6 +185,7 @@ function drawRows(c) {
         <td><div class="rank-name">${avatar(u)}<div style="min-width:0;flex:1"><div class="n">${esc(userName(u))}</div><div class="bar"><div style="width:${Math.max(3, (r.likes / max) * 100)}%"></div></div></div></div></td>
         <td class="num"><span class="big-num">${num(r.likes)}</span></td>
         <td class="num">${num(r.likes)} <span class="muted small">(${Math.round((r.likes / total) * 100)}%)</span></td>
+        <td class="num muted small" title="${r.last ? esc(fmtMs(r.last)) : ''}">${r.last ? esc(fmtMs(r.last, false)) : '—'}</td>
         <td><button class="link-btn" data-vk title="Профиль ВКонтакте">${icon('external')}</button></td>`;
       tr.onclick = () => openUser(r.uid);
       tr.querySelector('[data-vk]').onclick = (e) => {
@@ -210,22 +227,67 @@ function drawChart() {
   }
   const W = 320;
   const H = 140;
-  const pad = 6;
+  const pad = 8;
   const series = [
     { key: 'likes', color: '#c9607f', label: 'Лайки' },
     { key: 'unique_users', color: '#7c66c4', label: 'Участники' },
   ];
   const t0 = snaps[0].at;
   const t1 = snaps[snaps.length - 1].at || t0 + 1;
+  const xOf = (x) => pad + ((x.at - t0) / (t1 - t0 || 1)) * (W - 2 * pad);
+  for (const s of series) s.max = Math.max(1, ...snaps.map((x) => x[s.key] || 0));
+  const yOf = (x, s) => H - pad - ((x[s.key] || 0) / s.max) * (H - 2 * pad);
   const lines = series
-    .map((s) => {
-      const max = Math.max(1, ...snaps.map((x) => x[s.key] || 0));
-      const pts = snaps.map((x) => `${pad + ((x.at - t0) / (t1 - t0 || 1)) * (W - 2 * pad)},${H - pad - ((x[s.key] || 0) / max) * (H - 2 * pad)}`).join(' ');
-      return `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />`;
-    })
+    .map((s) => `<polyline points="${snaps.map((x) => `${xOf(x)},${yOf(x, s)}`).join(' ')}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />`)
     .join('');
   const lastSnap = snaps[snaps.length - 1];
-  box.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${lines}</svg>
+  box.innerHTML = `<div class="chart-wrap">
+      <svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${lines}<line class="chart-cursor" x1="0" x2="0" y1="0" y2="${H}" vector-effect="non-scaling-stroke" /></svg>
+      ${series.map((s, i) => `<span class="chart-pt" data-pt="${i}" style="background:${s.color}"></span>`).join('')}
+      <div class="chart-tip" hidden></div>
+    </div>
     <div class="row small" style="margin-top:6px">${series.map((s) => `<span><span class="dot" style="background:${s.color}"></span>${s.label}: <b>${num(lastSnap[s.key])}</b></span>`).join(' ')}</div>
-    <div class="muted small">${fmtMs(t0, false)} — ${fmtMs(t1, false)} · ${pl(snaps.length, 'снимок', 'снимка', 'снимков')}</div>`;
+    <div class="muted small">${fmtMs(t0, false)} — ${fmtMs(t1, false)} · ${pl(snaps.length, 'снимок', 'снимка', 'снимков')} · наведите на график, чтобы увидеть данные</div>`;
+
+  const wrap = box.querySelector('.chart-wrap');
+  const svg = wrap.querySelector('svg');
+  const cur = svg.querySelector('.chart-cursor');
+  const tip = wrap.querySelector('.chart-tip');
+  const pts = [...wrap.querySelectorAll('.chart-pt')];
+  const delta = (v, prev) => {
+    if (prev == null) return '';
+    const d = v - prev;
+    return d ? ` <span class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : '−'}${num(Math.abs(d))}</span>` : '';
+  };
+  const hide = () => {
+    tip.hidden = true;
+    cur.style.display = 'none';
+    pts.forEach((p) => (p.style.display = 'none'));
+  };
+  hide();
+  wrap.addEventListener('mouseleave', hide);
+  wrap.addEventListener('mousemove', (e) => {
+    const r = svg.getBoundingClientRect();
+    const vx = ((e.clientX - r.left) / r.width) * W;
+    // ближайший снимок по горизонтали
+    let i = 0;
+    for (let k = 1; k < snaps.length; k++) if (Math.abs(xOf(snaps[k]) - vx) < Math.abs(xOf(snaps[i]) - vx)) i = k;
+    const x = snaps[i];
+    const prev = snaps[i - 1];
+    const px = (xOf(x) / W) * r.width;
+    cur.setAttribute('x1', xOf(x));
+    cur.setAttribute('x2', xOf(x));
+    cur.style.display = '';
+    series.forEach((s, k) => {
+      pts[k].style.display = '';
+      pts[k].style.left = `${px}px`;
+      pts[k].style.top = `${(yOf(x, s) / H) * r.height}px`;
+    });
+    tip.innerHTML = `<div class="chart-tip-date">${esc(fmtMs(x.at))}</div>
+      ${series.map((s) => `<div><span class="dot" style="background:${s.color}"></span>${s.label}: <b>${num(x[s.key] || 0)}</b>${delta(x[s.key] || 0, prev && (prev[s.key] || 0))}</div>`).join('')}
+      <div class="muted">Публикаций: <b>${num(x.posts || 0)}</b>${x.collected_likes != null ? ` · собрано лайков: <b>${num(x.collected_likes)}</b>` : ''}</div>`;
+    tip.hidden = false;
+    const tw = tip.offsetWidth;
+    tip.style.left = `${Math.max(0, Math.min(r.width - tw, px - tw / 2))}px`;
+  });
 }

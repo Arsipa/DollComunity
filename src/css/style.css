@@ -596,3 +596,43 @@ body.touring .card:hover { transform: none; }
 .src-chip.pink { --c: var(--pink-deep); --bgc: var(--pink-soft); }
 .d-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
 body.touring .card-acts { opacity: 1; transform: none; } /* в обучении кнопки карточки видны всегда */
+
+/* ---------- правки интерфейса: шапка поста, карточки, поиск, сортировка ---------- */
+.detail-top { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-bottom: -6px; }
+.detail-top .spacer { flex: 1; }
+/* карточки в одной строке одинаковой высоты; подвал прижат к низу */
+.grid { align-items: stretch; }
+.card { cursor: pointer; }
+.card-photo { cursor: pointer; }
+.card-body { flex: 1; }
+.card-foot { margin-top: auto; }
+.card-text, .card-text.long { -webkit-line-clamp: 3; color: var(--ink-2); }
+/* подсказка с лайками: весь список, с прокруткой */
+.popover-list { max-height: min(320px, 50vh); overflow-y: auto; overscroll-behavior: contain; margin: 0 -4px; padding: 0 4px; }
+/* поиск с переключателем «Текст / Лайки» внутри поля */
+.search.with-mode .input { padding-right: 178px; }
+.q-mode { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--bg-2); }
+.q-mode button { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13px; font-weight: 750; color: var(--muted); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.q-mode button .icon { position: static; transform: none; width: 14px; height: 14px; color: inherit; }
+.q-mode button:hover { color: var(--ink-2); }
+.q-mode button.on { background: var(--surface); color: var(--pink-deep); box-shadow: var(--shadow-sm); }
+.toolbar .spacer { flex: 1; }
+.toolbar .search { max-width: 520px; }
+.dd-ico { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; color: var(--pink-deep); }
+.dd-opt .dd-ico { color: var(--muted); }
+.dd-opt.on .dd-ico { color: var(--pink-deep); }
+/* панель поверх окна поста — тоже слегка затемняем фон */
+.drawer-wrap.stacked { background: rgba(61, 36, 52, 0.16); }
+.dd-ico.fill { fill: currentColor; stroke: none; }
+/* рейтинг: стрелка направления сортировки */
+.rank-table th[data-sort]:hover { color: var(--ink-2); }
+.rank-table th[data-dir="asc"]::after { content: ' ▲'; font-size: 9px; vertical-align: 1px; }
+.rank-table th[data-dir="desc"]::after { content: ' ▼'; font-size: 9px; vertical-align: 1px; }
+/* график «Динамика» с подсказкой */
+.chart-wrap { position: relative; cursor: crosshair; }
+.chart-cursor { stroke: var(--line-2); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-pt { position: absolute; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(40, 24, 36, 0.3); transform: translate(-50%, -50%); pointer-events: none; }
+.chart-tip { position: absolute; top: 0; transform: translateY(calc(-100% - 6px)); z-index: 5; pointer-events: none; white-space: nowrap; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 8px 11px; font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; }
+.chart-tip-date { font-weight: 850; color: var(--ink); }
+.chart-tip .up { color: var(--mint-deep); font-weight: 800; }
+.chart-tip .down { color: #c0392b; font-weight: 800; }

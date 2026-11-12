@@ -36,6 +36,8 @@ const P = {
   arrowUp: '<path d="M12 19V5M5 12l7-7 7 7"/>',
   crown: '<path d="M3 8l4.5 4L12 5l4.5 7L21 8l-2 11H5z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
+  sortNew: '<path d="M7 4v16M3.5 16.5L7 20l3.5-3.5"/><path d="M13 6h8M13 11h6M13 16h4"/>',
+  sortOld: '<path d="M7 20V4M3.5 7.5L7 4l3.5 3.5"/><path d="M13 6h4M13 11h6M13 16h8"/>',
   doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
 };
 
@@ -332,7 +334,7 @@ export function enhanceSelect(sel) {
   wrap.append(btn);
   const sync = () => {
     const o = sel.options[sel.selectedIndex];
-    btn.innerHTML = `<span class="dd-val">${esc(o ? o.text : '')}</span>${CHEVRON}`;
+    btn.innerHTML = `${o && o.dataset.icon ? icon(o.dataset.icon, o.dataset.icon.endsWith('Fill') ? 'dd-ico fill' : 'dd-ico') : ''}<span class="dd-val">${esc(o ? o.text : '')}</span>${CHEVRON}`;
     btn.disabled = sel.disabled;
   };
   // sel.value = '…' из кода экрана тоже должно обновлять кнопку
@@ -364,7 +366,7 @@ export function enhanceSelect(sel) {
     const list = document.createElement('div');
     list.className = 'dd-list';
     list.setAttribute('role', 'listbox');
-    list.innerHTML = [...sel.options].map((o, i) => `<div class="dd-opt ${i === sel.selectedIndex ? 'on' : ''}" role="option" data-i="${i}">${TICK}<span>${esc(o.text)}</span></div>`).join('');
+    list.innerHTML = [...sel.options].map((o, i) => `<div class="dd-opt ${i === sel.selectedIndex ? 'on' : ''}" role="option" data-i="${i}">${TICK}${o.dataset.icon ? icon(o.dataset.icon, o.dataset.icon.endsWith('Fill') ? 'dd-ico fill' : 'dd-ico') : ''}<span>${esc(o.text)}</span></div>`).join('');
     document.body.append(list);
     const r = btn.getBoundingClientRect();
     list.style.minWidth = `${r.width}px`;

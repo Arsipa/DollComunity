@@ -457,16 +457,34 @@ function vkWebSession() {
 }
 const webFetch = (url, opts) => vkWebSession().fetch(url, { credentials: 'include', ...opts });
 
+// Кука сессии ВКонтакте (remixsid / remixnsid) есть только у вошедших. Это надёжнее разбора страницы:
+// после входа через id.vk.ru лента m.vk.ru может прийти в непривычном виде, и тогда вход «не виден».
+async function vkWebHasSessionCookie() {
+  try {
+    const all = await vkWebSession().cookies.get({});
+    return all.some((c) => /(^|\.)vk\.(ru|com)$/.test(c.domain.replace(/^\./, '')) && /^remixn?sid$/.test(c.name) && c.value && c.value.length > 8 && c.value !== 'DELETED');
+  } catch (_) {
+    return false;
+  }
+}
+
 async function vkWebStatus() {
+  const cookie = await vkWebHasSessionCookie();
   try {
     // лента есть только у вошедших: гостя VK отправляет на login.vk.ru ({"location":"https://login.vk.ru/..."})
     const r = await webFetch('https://m.vk.ru/feed', AJAX);
-    const j = await r.json();
-    if (typeof j.html === 'string') return { loggedIn: !/UnauthorizedHeader|basis__header_unauthorized/.test(j.html) };
-    if (typeof j.location === 'string') return { loggedIn: !/login|\/join|act=auth/i.test(j.location) };
-    return { loggedIn: false };
+    const raw = await r.text();
+    let j = null;
+    try {
+      j = JSON.parse(raw);
+    } catch (_) {}
+    let page = null; // true / false / null — страница не дала ответа
+    if (j && typeof j.html === 'string') page = !/UnauthorizedHeader|basis__header_unauthorized/.test(j.html);
+    else if (j && typeof j.location === 'string') page = !/login|\/join|act=auth/i.test(j.location);
+    if (page !== cookie) log('info', `vk.com: проверка входа — кука сессии: ${cookie ? 'есть' : 'нет'}, страница: ${page === null ? `непонятный ответ (${raw.slice(0, 80).replace(/\s+/g, ' ')})` : page ? 'вошли' : 'гость'}`);
+    return { loggedIn: cookie || page === true };
   } catch (e) {
-    return { loggedIn: false, offline: true };
+    return { loggedIn: cookie, offline: !cookie };
   }
 }
 
@@ -504,7 +522,15 @@ function vkWebLoginWindow() {
     w.webContents.setWindowOpenHandler(() => ({ action: 'allow', overrideBrowserWindowOptions: { parent: w, autoHideMenuBar: true, webPreferences: { partition: WEB_PART, sandbox: true } } }));
     w.webContents.on('did-navigate', (_e, u) => check(u));
     w.webContents.on('did-navigate-in-page', (_e, u) => check(u));
-    w.on('closed', () => vkWebStatus().then(finish));
+    // вход мог завершиться на странице, которую check() пропускает (id.vk.ru и т.п.) — ловим появление куки сессии
+    const onCookie = (_e, c, _cause, removed) => {
+      if (!removed && /^remixn?sid$/.test(c.name)) setTimeout(() => check('https://m.vk.ru/'), 400);
+    };
+    ses.cookies.on('changed', onCookie);
+    w.on('closed', () => {
+      ses.cookies.removeListener('changed', onCookie);
+      vkWebStatus().then(finish);
+    });
     w.loadURL('https://m.vk.ru/login');
   });
 }

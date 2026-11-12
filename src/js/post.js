@@ -29,7 +29,11 @@ export function openPost(id, startIdx = 0) {
         ${ph.length > 1 ? `<div class="g-thumbs">${ph.map((x, i) => `<img src="${esc(photoSrc(x))}" class="${i === idx ? 'on' : ''}" data-i="${i}" alt="" />`).join('')}</div>` : ''}
       </div>
       <div class="detail-side">
-        <div class="row" style="justify-content:flex-end">
+        <div class="detail-top">
+          <button class="btn primary sm" data-orig title="Открыть пост во ВКонтакте">${icon('external')} Открыть оригинал</button>
+          <button class="btn sm icon-only" data-edit title="Редактировать карточку">${icon('edit')}</button>
+          <button class="btn ghost sm icon-only danger" data-del title="Удалить (убрать в корзину)">${icon('trash')}</button>
+          <div class="spacer"></div>
           <button class="btn ghost icon-only sm" data-close title="Закрыть">${icon('close')}</button>
         </div>
         <div id="d-tab">${postTab(post, changes)}</div>
@@ -80,11 +84,6 @@ function postTab(p, changes) {
     <div class="d-stats">
       <button class="likes-pill" data-likes title="Кто поставил «Мне нравится»">${icon('heartFill', 'fill')} ${num(p.likes_count)}</button>
       ${stats.map((x) => `<span class="d-stat">${x}</span>`).join('')}
-    </div>
-    <div class="detail-actions">
-      <button class="btn primary" data-orig>${icon('external')} Открыть оригинал</button>
-      <button class="btn" data-edit>${icon('edit')} Редактировать</button>
-      <button class="btn ghost danger" data-del>${icon('trash')} Удалить</button>
     </div>
     ${
       people.length

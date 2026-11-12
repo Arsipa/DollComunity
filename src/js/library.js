@@ -134,26 +134,30 @@ function monthList() {
     });
 }
 
+const qPlaceholder = () => (F.qMode === 'text' ? 'Поиск по названию и тексту…' : 'Имя того, кто поставил лайк…');
+
 function toolbar() {
   const months = monthList();
   if (F.month && !months.some((m) => m.key === F.month)) F.month = '';
   return `
   <div class="toolbar">
-    <div class="search">${icon('search')}<input class="input" id="f-q" placeholder="${F.qMode === 'text' ? 'Поиск по названию и тексту…' : 'Имя того, кто поставил лайк…'}" value="${esc(F.q)}" /></div>
-    <select class="select" id="f-qmode" title="Где искать">
-      <option value="text" ${F.qMode === 'text' ? 'selected' : ''}>в тексте</option>
-      <option value="liker" ${F.qMode === 'liker' ? 'selected' : ''}>по лайкнувшим</option>
-    </select>
+    <div class="search with-mode">${icon('search')}<input class="input" id="f-q" placeholder="${qPlaceholder()}" value="${esc(F.q)}" />
+      <div class="q-mode" title="Где искать">
+        <button type="button" data-qmode="text" class="${F.qMode === 'text' ? 'on' : ''}" title="Искать в названии и тексте поста">${icon('doc')}<span>Текст</span></button>
+        <button type="button" data-qmode="liker" class="${F.qMode === 'liker' ? 'on' : ''}" title="Искать по имени того, кто поставил лайк">${icon('heart')}<span>Лайки</span></button>
+      </div>
+    </div>
     <select class="select" id="f-month" title="Месяц публикации">
-      <option value="">Все месяцы · ${num(S.posts.length)}</option>
+      <option value="">Все месяцы</option>
       ${months.map((m) => `<option value="${m.key}" ${F.month === m.key ? 'selected' : ''}>${m.label} · ${num(m.n)}</option>`).join('')}
     </select>
-    <select class="select" id="f-sort">
-      <option value="date_desc">Сначала новые</option>
-      <option value="date_asc">Сначала старые</option>
-      <option value="likes_desc">Больше лайков</option>
-      <option value="likes_asc">Меньше лайков</option>
-      <option value="added_desc">Недавно добавленные</option>
+    <div class="spacer"></div>
+    <select class="select" id="f-sort" title="Порядок карточек">
+      <option value="date_desc" data-icon="sortNew">Сначала новые</option>
+      <option value="date_asc" data-icon="sortOld">Сначала старые</option>
+      <option value="likes_desc" data-icon="heartFill">Больше лайков</option>
+      <option value="likes_asc" data-icon="heart">Меньше лайков</option>
+      <option value="added_desc" data-icon="plus">Недавно добавленные</option>
     </select>
   </div>
 `;
@@ -162,11 +166,16 @@ function toolbar() {
 function bindToolbar() {
   $('#f-sort').value = F.sort;
   $('#f-q').addEventListener('input', debounce((e) => ((F.q = e.target.value), renderGrid()), 180));
-  $('#f-qmode').onchange = (e) => {
-    F.qMode = e.target.value;
-    $('#f-q').placeholder = F.qMode === 'text' ? 'Поиск по названию и тексту…' : 'Имя того, кто поставил лайк…';
-    renderGrid();
-  };
+  $$('[data-qmode]').forEach(
+    (b) =>
+      (b.onclick = () => {
+        F.qMode = b.dataset.qmode;
+        $$('[data-qmode]').forEach((x) => x.classList.toggle('on', x === b));
+        $('#f-q').placeholder = qPlaceholder();
+        $('#f-q').focus();
+        renderGrid();
+      }),
+  );
   $('#f-month').onchange = (e) => ((F.month = e.target.value), renderGrid());
   $('#f-sort').onchange = (e) => {
     F.sort = e.target.value;
@@ -248,8 +257,7 @@ function card(p) {
     <div class="card-body">
       ${sourceChip(p)}
       ${p.title ? `<h3 class="card-title" title="${esc(p.title)}">${esc(p.title)}</h3>` : ''}
-      <p class="card-text ${t ? '' : 'empty'} ${p.title ? '' : 'long'}">${t ? esc(t.length > 600 ? t.slice(0, 600) + '…' : t) : 'Без текста'}</p>
-      ${t.length > 140 || t.split('\n').length > 3 ? '<button class="more-link" data-open>Читать полностью</button>' : ''}
+      ${t ? `<p class="card-text">${esc(t.length > 400 ? t.slice(0, 400) + '…' : t)}</p>` : ''}
     </div>
     <div class="card-foot">
       <button class="likes-pill" data-likes title="Кто поставил «Мне нравится»">${icon('heartFill', 'fill')} ${num(p.likes_count)}</button>
@@ -273,7 +281,11 @@ function card(p) {
         slideBy(Number(b.dataset.s));
       }),
   );
-  el.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openPost(p.id, slide)));
+  // вся карточка открывает пост (кнопки внутри обрабатывают клик сами)
+  el.onclick = (e) => {
+    if (e.target.closest('button, a')) return;
+    openPost(p.id, slide);
+  };
   const stop = (fn) => (e) => {
     e.stopPropagation();
     fn();
@@ -281,9 +293,10 @@ function card(p) {
   el.querySelector('[data-orig]').onclick = stop(() => window.api.openUrl(p.url));
   el.querySelector('[data-edit]').onclick = stop(() => openEditor(p.id));
   el.querySelector('[data-del]').onclick = stop(() => deletePost(p.id));
-  el.querySelector('[data-src]').onclick = () => window.api.openUrl(ownerUrl(p));
+  el.querySelector('[data-src]').onclick = stop(() => window.api.openUrl(ownerUrl(p)));
   const lk = el.querySelector('[data-likes]');
-  lk.onclick = () => {
+  lk.onclick = (e) => {
+    e.stopPropagation();
     hidePopover();
     openLikers(p.id);
   };
@@ -309,13 +322,11 @@ function showPopover(anchor, p) {
   const ids = likersOf(p);
   const sorted = ids
     .map((id) => S.users[id] || { id, first_name: 'Участник', last_name: '' })
-    .sort((a, b) => (b.likes || 0) - (a.likes || 0))
-    .slice(0, 6);
+    .sort((a, b) => (b.likes || 0) - (a.likes || 0) || userName(a).localeCompare(userName(b), 'ru'));
   const missing = p.likes_count - ids.length;
   pop = html(`<div class="popover">
     <div class="popover-title">${p.likes_count ? `Понравилось ${pl(p.likes_count, 'человеку', 'людям', 'людям')}` : 'Пока никто не поставил лайк'}</div>
-    ${sorted.map((u) => `<div class="person" data-uid="${u.id}" style="cursor:pointer">${avatar(u)}<div class="name">${esc(userName(u))}</div><button class="link-btn" data-vk="${esc(u.url || '')}" title="Открыть профиль ВКонтакте">${icon('external')}</button></div>`).join('')}
-    ${ids.length > 6 ? `<div class="popover-foot">и ещё ${pl(ids.length - 6, 'человек', 'человека', 'человек')} — нажмите, чтобы увидеть всех</div>` : ''}
+    ${sorted.length ? `<div class="popover-list">${sorted.map((u) => `<div class="person" data-uid="${u.id}" style="cursor:pointer">${avatar(u)}<div class="name">${esc(userName(u))}</div><button class="link-btn" data-vk="${esc(u.url || '')}" title="Открыть профиль ВКонтакте">${icon('external')}</button></div>`).join('')}</div>` : ''}
     ${!ids.length && p.likes_count ? '<div class="popover-foot">Список ещё не загружен — нажмите «Обновить данные»</div>' : missing > 0 && ids.length ? `<div class="popover-foot" style="color:var(--muted)">Собрано ${num(ids.length)} из ${num(p.likes_count)}</div>` : ''}
   </div>`);
   document.body.append(pop);
