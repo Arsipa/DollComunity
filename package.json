@@ -1,7 +1,7 @@
 {
   "name": "vk-doll-community",
   "productName": "VK Doll Community",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Локальная библиотека кукольных публикаций ВКонтакте и активности участников",
   "main": "desktop/main.js",
   "author": "VK Doll Community",

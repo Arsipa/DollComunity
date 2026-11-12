@@ -634,6 +634,7 @@ body.touring .card-acts { opacity: 1; transform: none; } /* в обучении 
 .chart-cursor { stroke: var(--line-2); stroke-width: 1; stroke-dasharray: 3 3; }
 .chart-pt { position: absolute; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(40, 24, 36, 0.3); transform: translate(-50%, -50%); pointer-events: none; }
 .chart-tip { position: absolute; top: 0; transform: translateY(calc(-100% - 6px)); z-index: 5; pointer-events: none; white-space: nowrap; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 8px 11px; font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; }
+.chart-tip[hidden] { display: none; }
 .chart-tip-date { font-weight: 850; color: var(--ink); }
 .chart-tip .up { color: var(--mint-deep); font-weight: 800; }
 .chart-tip .down { color: #c0392b; font-weight: 800; }
