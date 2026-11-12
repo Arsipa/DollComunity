@@ -56,10 +56,11 @@ async function pool(items, n, fn) {
 }
 
 class SyncEngine extends EventEmitter {
-  constructor({ store, getToken, log, makeThumb }) {
+  constructor({ store, getToken, refreshToken, log, makeThumb }) {
     super();
     this.store = store;
     this.getToken = getToken;
+    this.refreshToken = refreshToken;
     this.log = log;
     this.makeThumb = makeThumb; // (srcPath, destPath) => Promise
     this.running = false;
@@ -116,7 +117,7 @@ class SyncEngine extends EventEmitter {
     const updatedPosts = new Set();
     let fatal = null;
 
-    const vk = (this.vk = new VkClient({ getToken: this.getToken, log: this.log }));
+    const vk = (this.vk = new VkClient({ getToken: this.getToken, refreshToken: this.refreshToken, log: this.log }));
     const softError = (where, e) => {
       this.state.errors.push({ where, message: e.message, code: e.code || 'error' });
       this.log('warn', `${where}: ${e.message}`);

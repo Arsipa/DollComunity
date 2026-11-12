@@ -55,7 +55,7 @@ function defaultDoc(name) {
     case 'settings.json':
       return {
         version: SCHEMA_VERSION,
-        vk: { app_id: '', account: null },
+        vk: { app_id: '', redirect_uri: 'https://localhost/vk-callback', account: null },
         sources: [],
         sync: { max_posts: 200, since_days: 0, refresh_all_likes: false, save_avatars: true, all_photos: true },
         view: { sort: 'date_desc' },

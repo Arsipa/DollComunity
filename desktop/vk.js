@@ -30,8 +30,9 @@ function classify(err) {
 }
 
 class VkClient {
-  constructor({ getToken, log, minInterval = 360 }) {
+  constructor({ getToken, refreshToken, log, minInterval = 360 }) {
     this.getToken = getToken;
+    this.refreshToken = refreshToken; // продление ключа VK ID при ошибке авторизации
     this.log = log || (() => {});
     this.minInterval = minInterval; // ~3 запроса в секунду — лимит VK для пользовательского ключа
     this.last = 0;
@@ -55,12 +56,19 @@ class VkClient {
 
   async _callWithRetry(method, params) {
     let attempt = 0;
+    let refreshed = false;
     for (;;) {
       if (this.aborted) throw new VkError('aborted', 'Обновление остановлено');
       await this._throttle();
       try {
         return await this._raw(method, params);
       } catch (e) {
+        if (e.code === 'auth' && !refreshed && this.refreshToken) {
+          refreshed = true;
+          try {
+            if (await this.refreshToken()) continue; // ключ продлён — повторяем запрос
+          } catch (_) {}
+        }
         const retriable = e.code === 'rate' || e.code === 'temporary' || e.code === 'network';
         attempt++;
         if (!retriable || attempt > 5) throw e;

@@ -8,6 +8,7 @@ const { Store, stamp } = require('./storage');
 const { SyncEngine } = require('./sync');
 const { VkClient, parseSourceInput } = require('./vk');
 const M = require('./model');
+const vkid = require('./vkid');
 
 const APP_NAME = 'VK Doll Community';
 const SRC_DIR = path.join(__dirname, '..', 'src');
@@ -62,7 +63,7 @@ let config = readConfig();
 let store;
 let win;
 let problems = [];
-let memToken = null; // если шифрование Windows недоступно — ключ живёт только до закрытия программы
+let memSession = null; // если шифрование Windows недоступно — ключ живёт только до закрытия программы
 
 // ---------- журнал ----------
 function log(level, msg) {
@@ -82,32 +83,69 @@ process.on('uncaughtException', (e) => log('error', 'uncaught: ' + (e && e.stack
 process.on('unhandledRejection', (e) => log('error', 'unhandled: ' + (e && e.stack)));
 
 // ---------- ключ доступа VK (DPAPI через safeStorage) ----------
-function saveToken(token) {
-  if (!token) {
-    memToken = null;
+// Хранится «сессия»: { kind: 'vkid', access_token, refresh_token, expires_at, device_id, client_id, ... }
+// или { kind: 'plain', access_token } — для вставленного вручную ключа (в т.ч. сервисного).
+function saveSession(sess) {
+  if (!sess) {
+    memSession = null;
     fs.rmSync(TOKEN_FILE(), { force: true });
     return { secure: true };
   }
+  memSession = sess;
   if (safeStorage.isEncryptionAvailable()) {
     fs.mkdirSync(path.dirname(TOKEN_FILE()), { recursive: true });
-    fs.writeFileSync(TOKEN_FILE(), safeStorage.encryptString(token));
-    memToken = token;
+    const tmp = TOKEN_FILE() + '.tmp';
+    fs.writeFileSync(tmp, safeStorage.encryptString(JSON.stringify(sess)));
+    fs.renameSync(tmp, TOKEN_FILE());
     return { secure: true };
   }
-  memToken = token;
   log('warn', 'Шифрование Windows недоступно: ключ VK не сохранён на диск');
   return { secure: false };
 }
-function loadToken() {
-  if (memToken) return memToken;
+function loadSession() {
+  if (memSession) return memSession;
   try {
-    const buf = fs.readFileSync(TOKEN_FILE());
-    memToken = safeStorage.decryptString(buf);
-    return memToken;
+    const raw = safeStorage.decryptString(fs.readFileSync(TOKEN_FILE()));
+    try {
+      memSession = JSON.parse(raw);
+    } catch (_) {
+      memSession = { kind: 'plain', access_token: raw }; // формат первой версии — просто строка
+    }
+    return memSession;
   } catch (_) {
     return null;
   }
 }
+const hasToken = () => !!loadSession();
+
+let refreshing = null;
+/** Продление ключа VK ID (одно на всех, даже если запросов много одновременно) */
+function refreshSession() {
+  const s = loadSession();
+  if (!s || s.kind !== 'vkid') return Promise.resolve(false);
+  if (!refreshing) {
+    refreshing = vkid
+      .refresh(s)
+      .then((ns) => {
+        saveSession(ns);
+        log('info', 'Ключ VK ID продлён');
+        return true;
+      })
+      .catch((e) => {
+        log('warn', `Не удалось продлить ключ VK ID: ${e.message} ${e.details || ''}`);
+        throw e;
+      })
+      .finally(() => (refreshing = null));
+  }
+  return refreshing;
+}
+async function getAccessToken() {
+  const s = loadSession();
+  if (!s) return null;
+  if (s.kind === 'vkid' && (s.expires_at || 0) - 120000 < Date.now()) await refreshSession();
+  return loadSession()?.access_token || null;
+}
+const vkClient = () => new VkClient({ getToken: getAccessToken, refreshToken: refreshSession, log });
 
 // ---------- протокол vkd:// ----------
 const notFound = () => new Response('Not found', { status: 404 });
@@ -265,7 +303,7 @@ function snapshotForUi() {
     users: store.get('users.json').users,
     deleted: store.get('deleted_posts.json').deleted,
     history: { runs: hist.runs.slice(0, 30), snapshots: hist.snapshots, last_sync: hist.last_sync || 0 },
-    account: { connected: !!loadToken(), info: store.get('settings.json').vk.account },
+    account: { connected: hasToken(), info: store.get('settings.json').vk.account },
     paths: { root: store.root },
     problems,
     blocked: [...store.blocked.keys()],
@@ -277,7 +315,7 @@ function snapshotForUi() {
 let engine;
 function getEngine() {
   if (!engine) {
-    engine = new SyncEngine({ store, getToken: async () => loadToken(), log, makeThumb });
+    engine = new SyncEngine({ store, getToken: getAccessToken, refreshToken: refreshSession, log, makeThumb });
     let lastPush = 0;
     engine.on('progress', (p) => {
       send('sync:progress', p);
@@ -294,34 +332,43 @@ function getEngine() {
   return engine;
 }
 
-// ---------- авторизация VK (официальное окно VK, пароль программа не видит) ----------
-function vkLoginWindow(appId) {
+// ---------- вход через VK ID (официальное окно VK, пароль программа не видит) ----------
+function vkIdLoginWindow({ clientId, redirectUri, scope }) {
+  const { verifier, challenge } = vkid.pkce();
+  const state = vkid.b64url(require('crypto').randomBytes(24));
+  const part = 'vkauth';
+  const ses = session.fromPartition(part);
+  const redirectBase = redirectUri.split(/[?#]/)[0];
   return new Promise((resolve, reject) => {
-    const part = 'vkauth';
-    const w = new BrowserWindow({ width: 700, height: 680, parent: win, modal: true, title: 'Вход ВКонтакте', autoHideMenuBar: true, webPreferences: { partition: part, sandbox: true } });
-    const redirect = 'https://oauth.vk.com/blank.html';
-    const url = `https://oauth.vk.com/authorize?client_id=${encodeURIComponent(appId)}&display=page&redirect_uri=${encodeURIComponent(redirect)}&scope=wall,groups,offline&response_type=token&v=5.199&revoke=1`;
+    const w = new BrowserWindow({ width: 560, height: 720, parent: win, modal: true, title: 'Вход ВКонтакте', autoHideMenuBar: true, webPreferences: { partition: part, sandbox: true } });
     let done = false;
-    const check = (u) => {
-      if (!u.startsWith(redirect)) return;
-      const hash = new URLSearchParams(u.split('#')[1] || '');
+    const finish = (err, val) => {
+      if (done) return;
       done = true;
-      if (hash.get('access_token')) resolve({ token: hash.get('access_token'), userId: hash.get('user_id') });
-      else reject(new Error(hash.get('error_description') || 'Вход отменён'));
-      setImmediate(() => w.destroy());
+      ses.webRequest.onBeforeRequest(null);
+      setImmediate(() => !w.isDestroyed() && w.destroy());
+      if (err) reject(err);
+      else resolve(val);
     };
-    w.webContents.on('will-redirect', (_e, u) => check(u));
-    w.webContents.on('did-navigate', (_e, u) => check(u));
-    w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    w.on('closed', () => {
-      if (!done) reject(new Error('Окно входа закрыто'));
+    // VK возвращает пользователя на https://localhost/... — перехватываем этот адрес, сервер не нужен
+    ses.webRequest.onBeforeRequest({ urls: [redirectBase + '*'] }, (details, cb) => {
+      cb({ cancel: true });
+      try {
+        finish(null, vkid.parseCallback(details.url, state));
+      } catch (e) {
+        finish(e);
+      }
     });
-    w.loadURL(url);
-  });
+    w.webContents.setWindowOpenHandler(() => ({ action: 'allow', overrideBrowserWindowOptions: { parent: w, autoHideMenuBar: true, webPreferences: { partition: part, sandbox: true } } }));
+    w.webContents.on('did-navigate', (_e, u) => log('info', `VK ID: ${u.split('?')[0]}`));
+    w.on('closed', () => finish(new vkid.VkIdError('Окно входа закрыто.', 'cancelled')));
+    log('info', `VK ID: открываю вход (client_id=${clientId}, redirect=${redirectUri}, scope=${scope || '—'})`);
+    w.loadURL(vkid.buildAuthUrl({ clientId, redirectUri, scope, state, challenge }));
+  }).then((r) => vkid.exchangeCode({ clientId, redirectUri, code: r.code, deviceId: r.deviceId, verifier, state: r.state || state }));
 }
 
 async function fetchAccount() {
-  const vk = new VkClient({ getToken: async () => loadToken(), log });
+  const vk = vkClient();
   try {
     const me = await vk.call('users.get', { fields: 'photo_100,screen_name' });
     if (Array.isArray(me) && me[0] && me[0].id) return { id: me[0].id, name: `${me[0].first_name} ${me[0].last_name}`, photo: me[0].photo_100, kind: 'user' };
@@ -448,8 +495,8 @@ function registerIpc() {
   h('source:resolve', async (input) => {
     const parsed = parseSourceInput(input);
     if (!parsed) throw new Error('Не получилось разобрать ссылку. Скопируйте адрес страницы из браузера, например https://vk.com/club123');
-    if (!loadToken()) throw new Error('Сначала подключите ВКонтакте в настройках.');
-    const vk = new VkClient({ getToken: async () => loadToken(), log });
+    if (!hasToken()) throw new Error('Сначала подключите ВКонтакте в настройках.');
+    const vk = vkClient();
     let kind = parsed.kind;
     let id = parsed.id;
     if (kind === 'screen') {
@@ -502,37 +549,63 @@ function registerIpc() {
   });
 
   // ---- VK ----
-  h('vk:login', async (appId) => {
-    if (!/^\d{4,12}$/.test(String(appId || ''))) throw new Error('Укажите номер (ID) приложения VK — только цифры.');
-    const r = await vkLoginWindow(String(appId));
-    const sec = saveToken(r.token);
+  h('vk:login', async (appId, redirectUri) => {
+    const clientId = String(appId || '').trim();
+    if (!/^\d{4,12}$/.test(clientId)) throw new Error('Укажите номер (ID) приложения VK — только цифры.');
+    const redirect = String(redirectUri || '').trim() || vkid.DEFAULT_REDIRECT;
+    if (!/^https:\/\/\S+$/i.test(redirect)) throw new Error('Адрес перенаправления должен начинаться с https://');
+    let sess;
+    try {
+      sess = await vkIdLoginWindow({ clientId, redirectUri: redirect, scope: vkid.DEFAULT_SCOPE });
+    } catch (e) {
+      if (e.code !== 'invalid_scope') {
+        log('warn', `VK ID: ${e.message} ${e.details || ''}`);
+        throw e;
+      }
+      log('warn', `VK ID: права «${vkid.DEFAULT_SCOPE}» не разрешены, вход без них`);
+      sess = await vkIdLoginWindow({ clientId, redirectUri: redirect, scope: '' });
+    }
+    const old = memSession;
+    memSession = sess;
+    let account;
+    try {
+      account = await fetchAccount();
+    } catch (e) {
+      memSession = old;
+      throw e;
+    }
+    const sec = saveSession(sess);
     const s = store.get('settings.json');
-    s.vk.app_id = String(appId);
-    s.vk.account = await fetchAccount();
+    s.vk.app_id = clientId;
+    s.vk.redirect_uri = redirect;
+    s.vk.account = account;
     store.writeNow('settings.json');
-    return { account: s.vk.account, secure: sec.secure };
+    log('info', `VK ID: вход выполнен (${account.name})`);
+    return { account, secure: sec.secure };
   });
   h('vk:set-token', async (token) => {
     let t = String(token || '').trim();
     const m = /access_token=([^&\s]+)/.exec(t);
     if (m) t = m[1];
     if (t.length < 20) throw new Error('Похоже, это не ключ доступа. Он длинный и состоит из букв и цифр.');
-    const old = memToken;
-    memToken = t;
+    const old = memSession;
+    memSession = { kind: 'plain', access_token: t };
     try {
       const account = await fetchAccount();
-      const sec = saveToken(t);
+      const sec = saveSession(memSession);
       const s = store.get('settings.json');
       s.vk.account = account;
       store.writeNow('settings.json');
       return { account, secure: sec.secure };
     } catch (e) {
-      memToken = old;
+      memSession = old;
       throw e;
     }
   });
   h('vk:logout', async () => {
-    saveToken(null);
+    const sess = loadSession();
+    if (sess && sess.kind === 'vkid') await vkid.logout(sess);
+    saveSession(null);
     await session.fromPartition('vkauth').clearStorageData();
     const s = store.get('settings.json');
     s.vk.account = null;
@@ -540,8 +613,8 @@ function registerIpc() {
     return true;
   });
   h('vk:check', async () => {
-    if (!(await VkClient.online())) return { online: false, connected: !!loadToken() };
-    if (!loadToken()) return { online: true, connected: false };
+    if (!(await VkClient.online())) return { online: false, connected: hasToken() };
+    if (!hasToken()) return { online: true, connected: false };
     const account = await fetchAccount();
     return { online: true, connected: true, account };
   });

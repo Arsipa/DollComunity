@@ -223,6 +223,77 @@ function makeEngine(store) {
     assert.ok(after.find((p) => p.post_id === 1).vk_missing > 0);
   });
 
+  // ---------- VK ID ----------
+  const vkid = require('../desktop/vkid');
+  const crypto = require('crypto');
+
+  await test('VK ID: PKCE и адрес входа', () => {
+    const { verifier, challenge } = vkid.pkce();
+    assert.ok(/^[A-Za-z0-9_-]{43,128}$/.test(verifier));
+    assert.strictEqual(challenge, vkid.b64url(crypto.createHash('sha256').update(verifier).digest()));
+    const u = new URL(vkid.buildAuthUrl({ clientId: 54893549, redirectUri: 'https://localhost/vk-callback', scope: 'wall groups', state: 'st', challenge }));
+    assert.strictEqual(u.origin + u.pathname, 'https://id.vk.com/authorize');
+    assert.strictEqual(u.searchParams.get('response_type'), 'code');
+    assert.strictEqual(u.searchParams.get('code_challenge_method'), 'S256');
+    assert.strictEqual(u.searchParams.get('redirect_uri'), 'https://localhost/vk-callback');
+    assert.strictEqual(u.searchParams.get('scope'), 'wall groups');
+  });
+
+  await test('VK ID: разбор ответа VK (код, ошибка, чужой state)', () => {
+    const r = vkid.parseCallback('https://localhost/vk-callback?code=abc&state=st&device_id=dev1&type=code_v2', 'st');
+    assert.deepStrictEqual(r, { code: 'abc', deviceId: 'dev1', state: 'st' });
+    const p = vkid.parseCallback('https://localhost/vk-callback?payload=' + encodeURIComponent(JSON.stringify({ code: 'c2', state: 'st', device_id: 'd2' })), 'st');
+    assert.strictEqual(p.code, 'c2');
+    assert.throws(() => vkid.parseCallback('https://localhost/vk-callback?error=access_denied', 'st'), (e) => e.code === 'cancelled');
+    assert.throws(() => vkid.parseCallback('https://localhost/vk-callback?code=a&state=evil', 'st'), (e) => e.code === 'state');
+  });
+
+  await test('VK ID: обмен кода и продление ключа', async () => {
+    const sent = [];
+    const fake = async (url, opts) => {
+      const p = Object.fromEntries(new URLSearchParams(opts.body));
+      sent.push({ url, p });
+      if (p.grant_type === 'authorization_code') return { status: 200, json: async () => ({ access_token: 'A1', refresh_token: 'R1', expires_in: 3600, user_id: 7 }) };
+      if (p.grant_type === 'refresh_token' && p.refresh_token === 'R1') return { status: 200, json: async () => ({ access_token: 'A2', refresh_token: 'R2', expires_in: 3600 }) };
+      return { status: 400, json: async () => ({ error: 'invalid_grant', error_description: 'bad' }) };
+    };
+    const s1 = await vkid.exchangeCode({ clientId: '54893549', redirectUri: 'https://localhost/vk-callback', code: 'abc', deviceId: 'dev1', verifier: 'v'.repeat(50), state: 'st' }, fake);
+    assert.strictEqual(sent[0].url, 'https://id.vk.com/oauth2/auth');
+    assert.deepStrictEqual(
+      Object.keys(sent[0].p).sort(),
+      ['client_id', 'code', 'code_verifier', 'device_id', 'grant_type', 'redirect_uri', 'state'],
+      'в обмене нет лишних code_challenge — из-за них VK отвечает ошибкой',
+    );
+    assert.strictEqual(s1.access_token, 'A1');
+    assert.strictEqual(s1.device_id, 'dev1');
+    assert.ok(s1.expires_at > Date.now() + 3500e3);
+    const s2 = await vkid.refresh(s1, fake);
+    assert.strictEqual(s2.access_token, 'A2');
+    assert.strictEqual(s2.refresh_token, 'R2', 'новый ключ продления сохраняется');
+    assert.strictEqual(sent[1].p.device_id, 'dev1');
+    await assert.rejects(vkid.refresh(s2, fake), (e) => e.code === 'auth');
+  });
+
+  await test('VK API: при устаревшем ключе — продление и повтор запроса', async () => {
+    const { VkClient } = require('../desktop/vk');
+    let token = 'old';
+    let refreshes = 0;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      const p = Object.fromEntries(new URLSearchParams(String(opts.body)));
+      if (p.access_token === 'old') return { ok: true, json: async () => ({ error: { error_code: 5, error_msg: 'expired' } }) };
+      return { ok: true, json: async () => ({ response: [{ id: 1 }] }) };
+    };
+    try {
+      const vk = new VkClient({ getToken: async () => token, refreshToken: async () => ((token = 'new'), ++refreshes, true), log: () => {}, minInterval: 0 });
+      const r = await vk.call('users.get', { user_ids: 1 });
+      assert.deepStrictEqual(r, [{ id: 1 }]);
+      assert.strictEqual(refreshes, 1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
   for (const [status, name, err] of results) console.log(`${status === 'ok' ? '✔' : '✘'} ${name}${err ? '\n   ' + (err.stack || err) : ''}`);
   fs.rmSync(tmpRoot, { recursive: true, force: true });
   const failed = results.filter((r) => r[0] !== 'ok').length;

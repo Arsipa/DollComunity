@@ -25,15 +25,21 @@ export function renderSettings() {
               : `<div class="account"><div class="ava md">VK</div><div><div style="font-weight:850">Не подключено</div><div class="small muted"><span class="dot off"></span>Без подключения можно смотреть уже собранную библиотеку</div></div></div>
             <div class="field"><label>ID приложения ВКонтакте</label>
               <div class="row"><input class="input" id="vk-appid" placeholder="Например: 51234567" value="${esc(s.vk.app_id || '')}" style="flex:1" /><button class="btn primary" id="vk-login">${icon('key')} Войти через ВКонтакте</button></div>
-              <details class="more"><summary>Где взять ID приложения?</summary>
-                <ol class="steps">
-                  <li>Откройте <a href="#" data-url="https://dev.vk.com/ru/admin/apps-list">dev.vk.com → Мои приложения</a> и нажмите «Создать приложение».</li>
-                  <li>Тип — «Standalone-приложение» (или «Веб/Десктоп»), название — любое, например «Моя кукольная библиотека».</li>
-                  <li>Скопируйте <b>ID приложения</b> (только цифры) и вставьте сюда.</li>
-                </ol>
-                <span class="hint">Это нужно сделать один раз. ID не является секретом.</span>
-              </details>
             </div>
+            <div class="field"><label>Доверенный Redirect URL</label>
+              <input class="input" id="vk-redirect" value="${esc(s.vk.redirect_uri || 'https://localhost/vk-callback')}" />
+              <span class="hint">Должен в точности совпадать с адресом в настройках приложения VK. Сайт по этому адресу не нужен — программа перехватывает его сама.</span>
+            </div>
+            <details class="more"><summary>Как создать приложение VK (один раз)</summary>
+              <ol class="steps">
+                <li>Откройте <a href="#" data-url="https://id.vk.com/about/business/go">VK ID для бизнеса</a> и создайте приложение. Платформа — <b>Web</b>, название — любое.</li>
+                <li>Базовый домен: <b>localhost</b></li>
+                <li>Доверенный Redirect URL: <b>https://localhost/vk-callback</b> (если указали другой — впишите его в поле выше).</li>
+                <li>В разделе «Доступы» по возможности включите «Стена» и «Сообщества» — без них программа тоже войдёт, но закрытые сообщества будут недоступны.</li>
+                <li>Скопируйте <b>ID приложения</b> (только цифры) в поле выше и нажмите «Войти через ВКонтакте».</li>
+              </ol>
+              <span class="hint">ID приложения не является секретом. Ключ входа хранится зашифрованным и продлевается автоматически.</span>
+            </details>
             <details class="more"><summary>Другой способ: вставить ключ доступа</summary>
               <p class="hint" style="margin:4px 0 8px">Если у вас уже есть ключ доступа (или сервисный ключ приложения из настроек приложения VK), вставьте его сюда. Можно вставить и всю ссылку со страницы после входа.</p>
               <div class="row"><input class="input" id="vk-token" placeholder="Ключ доступа" style="flex:1" type="password" /><button class="btn" id="vk-token-save">Подключить</button></div>
@@ -73,7 +79,7 @@ export function renderSettings() {
     const btn = e.currentTarget;
     btn.disabled = true;
     try {
-      const r = await window.api.vkLogin($('#vk-appid').value.trim());
+      const r = await window.api.vkLogin($('#vk-appid').value.trim(), $('#vk-redirect').value.trim());
       await reload();
       toast(`Подключено: ${r.account.name}`);
       if (!r.secure) toast('Шифрование Windows недоступно — ключ не сохранён и понадобится снова после перезапуска', { error: true, timeout: 9000 });
