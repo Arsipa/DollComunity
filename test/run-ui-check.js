@@ -25,8 +25,6 @@ const steps = [
   `add2::${CHECK}`,
   `set::document.querySelector('.overlay').remove(),${go('settings')}`,
   `set2::${CHECK}`,
-  `users::${go('users')}`,
-  `users2::${CHECK}`,
   `stats::${go('stats')}`,
   `stats2::${CHECK}`,
   `edit::${go('library')},setTimeout(()=>document.querySelector('.card [data-edit]').click(),300)`,
@@ -46,8 +44,8 @@ const lines = out.split('\n').filter((l) => l.includes('KEYTEST')).map((l) => l.
 fs.rmSync(root, { recursive: true, force: true });
 lines.forEach((l) => console.log(l));
 const blocked = lines.filter((l) => l.includes('ЗАБЛОКИРОВАНО'));
-if (lines.length < 7) {
-  console.log(`\n✘ проверено экранов: ${lines.length} из 7 — интерфейс не загрузился или сценарий сломался`);
+if (lines.length < 6) {
+  console.log(`\n✘ проверено экранов: ${lines.length} из 6 — интерфейс не загрузился или сценарий сломался`);
   process.exit(1);
 }
 if (blocked.length) {

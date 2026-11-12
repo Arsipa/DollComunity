@@ -8,7 +8,7 @@ import { startSync, go } from './app.js';
 const F = {
   q: '',
   qMode: 'text', // text | liker
-  month: '', // 'ГГГГ-ММ' или '' — все месяцы
+  month: null, // 'ГГГГ-ММ', '' — все месяцы, null — ещё не выбран (выберем по умолчанию)
   sort: 'date_desc',
 };
 let stopIncremental = null;
@@ -138,6 +138,11 @@ const qPlaceholder = () => (F.qMode === 'text' ? 'Поиск по названи
 
 function toolbar() {
   const months = monthList();
+  // по умолчанию — текущий месяц, а если в нём нет постов — ближайший прошлый, где они есть
+  if (F.month === null) {
+    const now = monthKey(Date.now() / 1000);
+    F.month = (months.find((m) => m.key <= now) || months[0] || { key: '' }).key;
+  }
   if (F.month && !months.some((m) => m.key === F.month)) F.month = '';
   return `
   <div class="toolbar">
@@ -379,4 +384,12 @@ export async function deletePost(id, after) {
   }
 }
 
-window.addEventListener('scroll', hidePopover, true);
+// прокрутка страницы закрывает подсказку, а прокрутка списка внутри неё — нет
+window.addEventListener(
+  'scroll',
+  (e) => {
+    if (pop && e.target instanceof Node && pop.contains(e.target)) return;
+    hidePopover();
+  },
+  true,
+);

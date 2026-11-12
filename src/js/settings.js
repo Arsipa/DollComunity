@@ -5,17 +5,6 @@ import { icon, esc, $, $$, bytes, pl, toast, toastError, confirmDialog, modal } 
 import { emptyTrash } from './trash.js';
 import { go } from './app.js';
 
-// ---- параметры обновления (раньше были на вкладке «Источники») ----
-function syncPanel(s) {
-  return `<div class="panel" id="p-sync">
-    <div class="panel-title">${icon('refresh')} Обновление данных</div>
-    <p class="panel-sub">Кнопка «Обновить данные» проверяет только посты, которые вы добавили, — больше ничего не скачивается.</p>
-    <label class="check"><input type="checkbox" id="opt-allphotos" ${s.sync.all_photos ? 'checked' : ''} /><span>Сохранять все фотографии поста<br><span class="hint">Иначе — только первую</span></span></label>
-    <label class="check"><input type="checkbox" id="opt-avatars" ${s.sync.save_avatars ? 'checked' : ''} /><span>Сохранять аватары тех, кто лайкнул<br><span class="hint">Чтобы они были видны без интернета</span></span></label>
-    <label class="check"><input type="checkbox" id="opt-likes" ${s.sync.refresh_all_likes ? 'checked' : ''} /><span>Полная проверка лайков при каждом обновлении<br><span class="hint">Медленнее. Обычно список перепроверяется, только если изменилось число лайков.</span></span></label>
-  </div>`;
-}
-
 // ---- списки лайков: вход на vk.com (и сервисный ключ для старых приложений VK) ----
 function likesPanel(acc) {
   const has = !!acc.serviceKey;
@@ -91,13 +80,6 @@ function bindLikesPanel() {
   });
 }
 
-function bindSyncPanel() {
-  const upd = (patch) => window.api.updateSettings({ sync: patch }).then((st) => (S.settings = st)).catch(toastError);
-  $('#opt-allphotos').onchange = (e) => upd({ all_photos: e.target.checked });
-  $('#opt-avatars').onchange = (e) => upd({ save_avatars: e.target.checked });
-  $('#opt-likes').onchange = (e) => upd({ refresh_all_likes: e.target.checked });
-}
-
 export function renderSettings() {
   const el = $('#view-settings');
   const s = S.settings;
@@ -142,7 +124,6 @@ export function renderSettings() {
           }
         </div>
         ${likesPanel(acc)}
-        ${syncPanel(s)}
       </div>
       <div class="col">
         <div class="panel">
@@ -170,7 +151,6 @@ export function renderSettings() {
     </div>`;
 
   $$('[data-url]', el).forEach((a) => (a.onclick = (e) => (e.preventDefault(), window.api.openUrl(a.dataset.url))));
-  bindSyncPanel();
   bindLikesPanel();
   // ---- очистка ----
   $('#clean-posts').onclick = async () => {

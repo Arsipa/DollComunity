@@ -42,10 +42,9 @@
 </tr>
 <tr>
 <td><img src="docs/screenshots/stats.png" alt="Статистика" /><br><sub>Статистика: рейтинг участников и популярные посты</sub></td>
-<td><img src="docs/screenshots/users.png" alt="Пользователи" /><br><sub>Все, кто ставил лайки</sub></td>
+<td><img src="docs/screenshots/month.png" alt="Фильтр по месяцу" /><br><sub>Поиск, фильтр по месяцу и сортировка</sub></td>
 </tr>
 <tr>
-<td><img src="docs/screenshots/month.png" alt="Фильтр по месяцу" /><br><sub>Поиск, фильтр по месяцу и сортировка</sub></td>
 <td><img src="docs/screenshots/settings.png" alt="Настройки" /><br><sub>Настройки: вход VK ID, списки лайков, очистка</sub></td>
 </tr>
 </table>

@@ -4,9 +4,18 @@ import { icon, esc, $, $$, html, num, pl, fmtDate, fmtMs, photoSrc, avatar, user
 import { openUser } from './people.js';
 import { openPost } from './post.js';
 
-const SF = { period: 'all', basis: 'posts', q: '', sort: 'likes', dir: 'desc' };
+// filter: all | open | closed — бывший раздел «Пользователи» теперь здесь
+const SF = { period: 'all', q: '', filter: 'all', sort: 'likes', dir: 'desc' };
 // направление по умолчанию при первом нажатии на заголовок
-const DEFAULT_DIR = { place: 'asc', name: 'asc', likes: 'desc', share: 'desc', last: 'desc' };
+const DEFAULT_DIR = { place: 'asc', name: 'asc', likes: 'desc', share: 'desc', last: 'desc', first: 'desc' };
+// варианты списка «Сортировка» (сочетание колонки и направления)
+const SORTS = [
+  { v: 'likes_desc', label: 'Больше лайков', icon: 'heartFill' },
+  { v: 'likes_asc', label: 'Меньше лайков', icon: 'heart' },
+  { v: 'name_asc', label: 'По имени', icon: 'users' },
+  { v: 'last_desc', label: 'Недавно лайкали', icon: 'history' },
+  { v: 'first_desc', label: 'Недавно появившиеся', icon: 'sparkle' },
+];
 
 function periodRange() {
   const now = Date.now();
@@ -19,12 +28,11 @@ function periodRange() {
 function compute() {
   const range = periodRange();
   let posts = S.posts;
-  if (range && SF.basis === 'posts') posts = posts.filter((p) => date(p) * 1000 >= range[0] && date(p) * 1000 <= range[1]);
+  if (range) posts = posts.filter((p) => date(p) * 1000 >= range[0] && date(p) * 1000 <= range[1]);
   const per = new Map();
   let collected = 0;
   for (const p of posts) {
     for (const [uid, seen] of Object.entries(p.likers || {})) {
-      if (range && SF.basis === 'seen' && (seen < range[0] || seen > range[1])) continue;
       let r = per.get(uid);
       if (!r) per.set(uid, (r = { uid, likes: 0, last: 0 }));
       r.likes++;
@@ -51,24 +59,30 @@ export function renderStats() {
       <div class="seg" id="s-period">
         <button data-p="all">Всё время</button><button data-p="7">Неделя</button><button data-p="30">Месяц</button><button data-p="365">Год</button>
       </div>
-      <select class="select" id="s-basis" title="Как считать период">
-        <option value="posts">по дате публикации</option>
-        <option value="seen">по дате, когда лайк замечен</option>
-      </select>
     </div>
     <div id="s-note"></div>
     <div class="kpis" id="s-kpis"></div>
     <div class="stats-grid">
       <div class="panel" style="padding:18px 14px">
-        <div class="row between" style="padding:0 8px 10px">
-          <div class="panel-title">${icon('crown')} Рейтинг участников</div>
-          <div class="search" style="width:260px">${icon('search')}<input class="input" id="s-q" placeholder="Найти участника…" value="${esc(SF.q)}" /></div>
+        <div class="row between" style="padding:0 8px 6px">
+          <div class="panel-title" style="margin:0">${icon('crown')} Рейтинг участников</div>
+          <span class="result-line" id="s-count"></span>
+        </div>
+        <div class="toolbar rank-tools">
+          <div class="search">${icon('search')}<input class="input" id="s-q" placeholder="Имя или город…" value="${esc(SF.q)}" /></div>
+          <select class="select" id="s-filter" title="Какие профили показывать">
+            <option value="all">Все профили</option><option value="open">Открытые профили</option><option value="closed">Закрытые профили</option>
+          </select>
+          <div class="spacer"></div>
+          <select class="select" id="s-sort" title="Порядок участников">
+            ${SORTS.map((o) => `<option value="${o.v}" data-icon="${o.icon}">${o.label}</option>`).join('')}
+          </select>
         </div>
         <table class="rank-table">
           <thead><tr>
             <th style="width:64px" data-sort="place" title="Сортировать по месту">Место</th><th data-sort="name" title="Сортировать по имени">Участник</th>
-            <th class="num" data-sort="likes" title="Сортировать по числу лайков">Лайки</th><th class="num" data-sort="share" title="Какой доле публикаций поставлен лайк">Публикаций</th>
-            <th class="num" data-sort="last" title="Когда лайк этого участника замечен в последний раз">Последний</th><th style="width:40px"></th>
+            <th class="num" style="width:76px" data-sort="likes" title="Сортировать по числу лайков">Лайки</th><th class="num" style="width:118px" data-sort="share" title="Какой доле публикаций поставлен лайк">Публикаций</th>
+            <th class="num" style="width:116px" data-sort="last" title="Когда лайк этого участника замечен в последний раз">Последний</th><th style="width:46px"></th>
           </tr></thead>
           <tbody id="s-rows"></tbody>
         </table>
@@ -85,8 +99,14 @@ export function renderStats() {
       renderStats();
     };
   });
-  $('#s-basis').value = SF.basis;
-  $('#s-basis').onchange = (e) => ((SF.basis = e.target.value), draw());
+  $('#s-filter').value = SF.filter;
+  $('#s-filter').onchange = (e) => ((SF.filter = e.target.value), drawRows(last));
+  $('#s-sort').onchange = (e) => {
+    const [k, d] = e.target.value.split('_');
+    SF.sort = k;
+    SF.dir = d;
+    drawRows(last);
+  };
   $('#s-q').addEventListener('input', debounce((e) => ((SF.q = e.target.value), drawRows(last)), 150));
   $$('.rank-table th[data-sort]').forEach(
     (th) =>
@@ -107,11 +127,7 @@ function draw() {
   const unique = c.rows.length;
   const note = $('#s-note');
   note.innerHTML =
-    SF.period !== 'all' && SF.basis === 'seen'
-      ? `<div class="notice lav banner">${icon('info')}<div>ВКонтакте не сообщает, когда поставлен лайк. Здесь учитывается момент, когда приложение <b>впервые увидело</b> лайк при обновлении. Лайки, найденные при первой загрузке, относятся ко дню этой загрузки.</div></div>`
-      : SF.period !== 'all'
-        ? `<div class="notice lav banner">${icon('info')}<div>Учитываются лайки к публикациям, вышедшим за выбранный период${S.history.snapshots.length < 2 ? '' : ''}.</div></div>`
-        : '';
+    SF.period !== 'all' ? `<div class="notice lav banner">${icon('info')}<div>Учитываются лайки к публикациям, вышедшим за выбранный период.</div></div>` : '';
   const avg = c.posts.length ? c.totalLikes / c.posts.length : 0;
   const kpi = (v, l, color) => `<div class="kpi" style="--c:${color}"><div class="v">${v}</div><div class="l">${l}</div></div>`;
   $('#s-kpis').innerHTML =
@@ -147,7 +163,11 @@ function drawRows(c) {
   });
   let rows = ranked;
   const q = SF.q.trim().toLowerCase();
-  if (q) rows = rows.filter((r) => userName(S.users[r.uid]).toLowerCase().includes(q));
+  if (q) rows = rows.filter((r) => (userName(S.users[r.uid]) + ' ' + (S.users[r.uid]?.city || '')).toLowerCase().includes(q));
+  if (SF.filter === 'open') rows = rows.filter((r) => S.users[r.uid] && !S.users[r.uid].is_closed);
+  if (SF.filter === 'closed') rows = rows.filter((r) => S.users[r.uid]?.is_closed);
+  const cnt = $('#s-count');
+  if (cnt) cnt.textContent = rows.length === ranked.length ? pl(rows.length, 'участник', 'участника', 'участников') : `Показано ${num(rows.length)} из ${num(ranked.length)}`;
   // все сравнения — «по возрастанию»; для убывания переворачиваем
   const nameOf = (r) => userName(S.users[r.uid] || { first_name: 'Участник', last_name: r.uid });
   const byName = (a, b) => nameOf(a).localeCompare(nameOf(b), 'ru');
@@ -156,6 +176,7 @@ function drawRows(c) {
     likes: (a, b) => a.likes - b.likes || byName(b, a),
     share: (a, b) => a.likes - b.likes || byName(b, a),
     last: (a, b) => a.last - b.last || byName(b, a),
+    first: (a, b) => (S.users[a.uid]?.first_seen || 0) - (S.users[b.uid]?.first_seen || 0) || byName(b, a),
     name: byName,
   };
   const cmp = sorters[SF.sort] || sorters.likes;
@@ -166,6 +187,10 @@ function drawRows(c) {
     th.classList.toggle('sorted', on);
     th.dataset.dir = on ? SF.dir : '';
   });
+  // список «Сортировка» показывает то же, что выбрано нажатием на заголовок
+  const sel = $('#s-sort');
+  const exact = SORTS.find((o) => o.v === `${SF.sort}_${SF.dir}`) || SORTS.find((o) => o.v.startsWith(SF.sort + '_'));
+  if (sel && exact && sel.value !== exact.v) sel.value = exact.v;
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="6"><div class="list-empty">${c.rows.length ? 'Никого не нашли' : 'За этот период лайков нет. Попробуйте другой период или обновите данные.'}</div></td></tr>`;
     return;
@@ -182,7 +207,7 @@ function drawRows(c) {
       const u = S.users[r.uid] || { id: r.uid, first_name: 'Участник', last_name: r.uid };
       const tr = document.createElement('tr');
       tr.innerHTML = `<td><div class="place ${r.place <= 3 ? 'p' + r.place : ''}">${r.place}</div></td>
-        <td><div class="rank-name">${avatar(u)}<div style="min-width:0;flex:1"><div class="n">${esc(userName(u))}</div><div class="bar"><div style="width:${Math.max(3, (r.likes / max) * 100)}%"></div></div></div></div></td>
+        <td><div class="rank-name">${avatar(u)}<div style="min-width:0;flex:1"><div class="n">${esc(userName(u))}${u.city ? ` <span class="rank-city">${esc(u.city)}</span>` : ''}${u.is_closed ? ` <span class="rank-city" title="Закрытый профиль">· закрытый</span>` : ''}</div><div class="bar"><div style="width:${Math.max(3, (r.likes / max) * 100)}%"></div></div></div></div></td>
         <td class="num"><span class="big-num">${num(r.likes)}</span></td>
         <td class="num">${num(r.likes)} <span class="muted small">(${Math.round((r.likes / total) * 100)}%)</span></td>
         <td class="num muted small" title="${r.last ? esc(fmtMs(r.last)) : ''}">${r.last ? esc(fmtMs(r.last, false)) : '—'}</td>

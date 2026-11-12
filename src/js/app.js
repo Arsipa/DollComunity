@@ -3,7 +3,6 @@ import { S, setData, reload, onState } from './state.js';
 import { icon, esc, $, $$, html, num, pl, ago, modal, toast, toastError, autoEnhanceSelects } from './util.js';
 import { renderLibrary, renderGrid, hidePopover } from './library.js';
 import { renderStats } from './stats.js';
-import { renderUsers } from './people.js';
 import { renderSettings } from './settings.js';
 import { renderTrash } from './trash.js';
 import { startTour } from './tour.js';
@@ -11,9 +10,8 @@ import { startTour } from './tour.js';
 const VIEWS = [
   { id: 'library', label: 'Мои посты', icon: 'library', render: renderLibrary, count: () => S.posts.length },
   { id: 'stats', label: 'Статистика', icon: 'stats', render: renderStats },
-  { id: 'users', label: 'Пользователи', icon: 'users', render: renderUsers, count: () => Object.keys(S.users).length },
   { id: 'trash', label: 'Корзина', icon: 'trash', render: renderTrash, count: () => S.deleted.filter((d) => d.post).length },
-  { id: 'settings', label: 'Настройки', icon: 'settings', render: renderSettings },
+  { id: 'settings', label: 'Настройки', icon: 'settings', render: renderSettings, bottom: true }, // внизу меню
 ];
 let current = 'library';
 
@@ -26,11 +24,13 @@ export function go(id) {
 }
 
 function renderNav() {
-  $('#nav').innerHTML = VIEWS.map((v) => {
+  const item = (v) => {
     const c = v.count ? v.count() : 0;
     return `<button class="nav-item ${v.id === current ? 'active' : ''}" data-view="${v.id}" title="${v.label}">${icon(v.icon)}<span>${v.label}</span>${c ? `<span class="count">${c > 9999 ? Math.round(c / 1000) + 'k' : num(c)}</span>` : ''}</button>`;
-  }).join('');
-  $$('#nav [data-view]').forEach((b) => (b.onclick = () => go(b.dataset.view)));
+  };
+  $('#nav').innerHTML = VIEWS.filter((v) => !v.bottom).map(item).join('');
+  $('#nav-bottom').innerHTML = VIEWS.filter((v) => v.bottom).map(item).join('');
+  $$('.sidebar [data-view]').forEach((b) => (b.onclick = () => go(b.dataset.view)));
   const acc = S.account;
   $('#side-status').innerHTML = `${acc.connected ? `<span class="dot ok"></span><b>${esc(acc.info?.name || 'ВКонтакте подключён')}</b>` : '<span class="dot off"></span><b>ВКонтакте не подключён</b>'}<br>${S.history.last_sync ? `Обновлено ${ago(S.history.last_sync)}` : 'Данные ещё не обновлялись'}`;
 }
@@ -162,7 +162,6 @@ async function boot() {
   go('library');
   if (S.syncing) drawDock({ phaseLabel: 'Обновление идёт…', done: 0, total: 0, checked: 0, created: 0, errors: 0 });
   if (!S.settings.onboarding_done) setTimeout(startTour, 400);
-  $('#help-btn').onclick = () => startTour();
 
   window.api.onSyncProgress((p) => {
     S.syncing = true;

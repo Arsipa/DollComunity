@@ -20,7 +20,7 @@ Electron-приложение для Windows: «Мои посты» — набо
 | Списки лайков со страницы «Оценили» на m.vk.ru (когда `likes.getList` даёт 1051) | `desktop/weblikes.js` (`WebLikes`, `likersToIds`); вход на vk.com — `vkWebLoginWindow()` в `desktop/main.js`, куки в разделе `persist:vkweb`; IPC `vkweb:status/login/logout` |
 | Модель публикации: оригинал VK vs ручные правки | `desktop/model.js` |
 | JSON-хранилище, атомарная запись, `.prev`, миграции | `desktop/storage.js` |
-| Экраны интерфейса | `src/js/` — `app.js` (каркас/навигация), `library.js` («Мои посты»), `post.js`, `stats.js`, `people.js`, `trash.js`, `settings.js` (в т.ч. параметры обновления), `tour.js` (обучение), `state.js`, `util.js` |
+| Экраны интерфейса | `src/js/` — `app.js` (каркас/навигация), `library.js` («Мои посты»), `post.js`, `stats.js` (рейтинг участников — бывший раздел «Пользователи»: поиск по имени и городу, фильтр профилей, сортировка), `people.js` (панель лайков и карточка участника), `trash.js`, `settings.js` (в т.ч. «Пройти обучение»), `tour.js` (обучение), `state.js`, `util.js` |
 | Окна и боковые панели (слои) | `modal()` / `drawer()` в `src/js/util.js`: новое окно всегда поверх открытых (`pushLayer`), Esc закрывает только верхнее, у панели поверх другой — кнопка «Назад» |
 | Стили / разметка | `src/css/style.css`, `src/index.html` |
 | Установщик | `package.json` → `build`, `build/installer.nsh` |

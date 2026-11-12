@@ -107,7 +107,7 @@ function buildSteps() {
     hasPosts && {
       target: () => q('#s-period'),
       title: 'Период',
-      text: 'Выберите, за какое время считать: всё время, неделя, месяц или год. Справа — как считать период.',
+      text: 'Выберите, за какое время считать: всё время, неделя, месяц или год.',
       pad: 6,
     },
     hasPosts && {
@@ -117,7 +117,7 @@ function buildSteps() {
       pad: 4,
     },
     {
-      target: () => q('#nav [data-view=settings]'),
+      target: () => q('.sidebar [data-view=settings]'),
       title: 'Настройки',
       text: 'Последний раздел.',
       click: true,
