@@ -90,7 +90,11 @@ export function renderSources() {
     }
   };
   $('#src-find').onclick = find;
-  $('#src-input').onkeydown = (e) => e.key === 'Enter' && find();
+  // Важно: не «onkeydown = (e) => e.key === 'Enter' && find()» — такой обработчик возвращает false
+  // для всех остальных клавиш, а false из on*-обработчика отменяет нажатие, и печатать становится нельзя.
+  $('#src-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') find();
+  });
   const upd = (patch) => window.api.updateSettings({ sync: patch }).then((st) => (S.settings = st)).catch(toastError);
   $('#opt-max').onchange = (e) => upd({ max_posts: Number(e.target.value) });
   $('#opt-since').onchange = (e) => upd({ since_days: Number(e.target.value) });
