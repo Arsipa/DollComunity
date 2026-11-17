@@ -646,3 +646,27 @@ body.touring .card-acts { opacity: 1; transform: none; } /* в обучении 
 .rank-table { table-layout: fixed; }
 .rank-table td { overflow: hidden; }
 .rank-name > div { min-width: 0; }
+
+/* ---------- сетка фото в карточке (вместо карусели) ---------- */
+.photo-grid { position: absolute; inset: 0; display: grid; gap: 3px; background: var(--surface); }
+.photo-grid.n2 { grid-template-columns: 1fr 1fr; }
+.photo-grid.n4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.pg-cell { position: relative; overflow: hidden; min-height: 0; background: linear-gradient(135deg, var(--pink-soft), var(--lav-soft)); }
+.pg-cell.pg-empty { background: var(--bg-2); }
+.pg-cell img { width: 100%; height: 100%; object-fit: cover; }
+.pg-more { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(40, 24, 36, 0.45); color: #fff; font-weight: 900; font-size: 22px; letter-spacing: -0.01em; backdrop-filter: blur(1px); }
+.toolbar .search.with-mode { min-width: 380px; }
+
+/* ---------- кнопка «Обновить» со списком (как «Copy page ▾») ---------- */
+.split-btn { display: inline-flex; align-items: stretch; border-radius: 14px; box-shadow: 0 6px 16px rgba(201, 96, 127, 0.3); }
+.split-btn .btn.primary { box-shadow: none; }
+.split-btn #lib-sync { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.split-btn .split-chev { width: 46px; padding: 0; justify-content: center; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255, 255, 255, 0.35); }
+.split-btn .split-chev .icon { width: 18px; height: 18px; stroke-width: 2.4; transition: transform 0.18s; }
+.split-btn.open .split-chev .icon { transform: rotate(180deg); }
+.sync-menu { width: 330px; }
+.sync-opt { align-items: flex-start; white-space: normal; padding: 10px 12px 10px 8px; }
+.sync-opt .dd-tick, .sync-opt .dd-ico { margin-top: 3px; }
+.sync-opt b { display: block; font-weight: 800; color: var(--ink); }
+.sync-opt.on b { color: var(--pink-deep); }
+.sync-opt small { display: block; font-size: 12.5px; font-weight: 600; color: var(--muted); line-height: 1.35; margin-top: 2px; }

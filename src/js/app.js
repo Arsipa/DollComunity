@@ -55,6 +55,7 @@ export async function startSync(opts) {
     const r = await window.api.syncStart(opts);
     S.syncing = true;
     if (current === 'library') {
+      $('#lib-sync-menu')?.setAttribute('disabled', '');
       const b = $('#lib-sync');
       if (b) {
         b.disabled = true;

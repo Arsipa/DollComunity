@@ -1,5 +1,5 @@
 // «Мои посты»: карточки постов, добавленных по ссылке; поиск, сортировка, подсказка с лайками.
-import { S, eff, photos, text, date, localChanges, ownerName, likersOf, reload } from './state.js';
+import { S, eff, photos, text, date, localChanges, ownerName, likersOf, reload, myOwnerId, personPages, groupPages } from './state.js';
 import { icon, esc, $, $$, html, num, pl, fmtDate, photoSrc, placeholder, avatar, userName, debounce, incremental, toast, toastError, confirmDialog, ago, modal } from './util.js';
 import { openPost, openEditor } from './post.js';
 import { openLikers, openUser } from './people.js';
@@ -10,6 +10,8 @@ const F = {
   qMode: 'text', // text | liker
   month: null, // 'ГГГГ-ММ', '' — все месяцы, null — ещё не выбран (выберем по умолчанию)
   sort: 'date_desc',
+  owner: 'all', // all | mine | groups
+  group: '', // id сообщества (строкой) или '' — все сообщества
 };
 let stopIncremental = null;
 const root = () => $('#view-library');
@@ -26,13 +28,17 @@ export function renderLibrary() {
       </div>
       <div class="spacer"></div>
       <button class="btn lg" id="lib-add">${icon('plus')}<span>Добавить пост</span></button>
-      <button class="btn primary lg sync-btn" id="lib-sync" ${S.syncing ? 'disabled' : ''}>${icon('refresh', S.syncing ? 'spin' : '')}<span>${S.syncing ? 'Обновляю…' : 'Обновить данные'}</span></button>
+      <div class="split-btn" id="sync-split">
+        <button class="btn primary lg sync-btn" id="lib-sync" ${S.syncing ? 'disabled' : ''} title="${esc(syncMode().hint)}">${icon('refresh', S.syncing ? 'spin' : '')}<span>${S.syncing ? 'Обновляю…' : syncMode().label}</span></button>
+        <button class="btn primary lg split-chev" id="lib-sync-menu" ${S.syncing ? 'disabled' : ''} title="Выбрать, что обновлять" aria-haspopup="menu">${icon('chevD')}</button>
+      </div>
     </div>
     <div id="lib-banners"></div>
     ${S.posts.length ? toolbar() : ''}
     <div class="grid" id="lib-grid"></div>
     <div id="lib-empty"></div>`;
-  $('#lib-sync').onclick = () => startSync();
+  $('#lib-sync').onclick = () => runSync();
+  $('#lib-sync-menu').onclick = (e) => toggleSyncMenu(e.currentTarget);
   $('#lib-add').onclick = () => openAddPost();
   renderBanners();
   if (!S.posts.length) {
@@ -43,6 +49,86 @@ export function renderLibrary() {
   }
   bindToolbar();
   renderGrid();
+}
+
+// ---------- кнопка «Обновить» с выбором: все посты или только добавленные за неделю ----------
+// Выбор запоминается в настройках (view.sync_mode), поэтому после перезапуска не сбрасывается.
+const SYNC_MODES = {
+  all: { label: 'Обновить данные', menu: 'Обновить все посты', hint: 'Проверить во ВКонтакте все добавленные посты', icon: 'refresh' },
+  week: { label: 'Обновить за неделю', menu: 'Только за неделю', hint: 'Проверить только посты, которые вы добавили в программу за последние 7 дней', icon: 'history' },
+};
+const syncModeKey = () => (S.settings?.view?.sync_mode === 'week' ? 'week' : 'all');
+const syncMode = () => SYNC_MODES[syncModeKey()];
+
+function runSync() {
+  if (syncModeKey() !== 'week') return startSync();
+  const since = Date.now() - 7 * 86400e3;
+  const ids = S.posts.filter((p) => (p.added_at || 0) >= since).map((p) => p.id);
+  if (!ids.length) return toast('За последние 7 дней вы не добавляли постов — обновлять нечего. Выберите «Обновить все посты» в списке у кнопки.');
+  toast(`Обновляю ${pl(ids.length, 'пост', 'поста', 'постов')}, добавленных за неделю…`);
+  startSync({ postIds: ids });
+}
+
+let syncMenu = null;
+function closeSyncMenu() {
+  if (!syncMenu) return;
+  syncMenu.el.remove();
+  document.removeEventListener('mousedown', syncMenu.onDown, true);
+  document.removeEventListener('keydown', syncMenu.onKey, true);
+  window.removeEventListener('resize', closeSyncMenu);
+  $('#sync-split')?.classList.remove('open');
+  syncMenu = null;
+}
+function toggleSyncMenu(anchor) {
+  if (syncMenu) return closeSyncMenu();
+  const cur = syncModeKey();
+  const el = html(`<div class="dd-list sync-menu" role="menu">
+    ${Object.entries(SYNC_MODES)
+      .map(
+        ([k, m]) => `<div class="dd-opt sync-opt ${k === cur ? 'on' : ''}" role="menuitemradio" aria-checked="${k === cur}" data-mode="${k}">
+          <svg class="dd-tick" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6.5"/></svg>${icon(m.icon, 'dd-ico')}
+          <span><b>${m.menu}</b><small>${m.hint}</small></span></div>`,
+      )
+      .join('')}
+  </div>`);
+  document.body.append(el);
+  const r = $('#sync-split').getBoundingClientRect();
+  el.style.top = `${r.bottom + 6}px`;
+  el.style.left = `${Math.max(8, r.right - el.offsetWidth)}px`;
+  $('#sync-split').classList.add('open');
+  el.addEventListener('click', async (e) => {
+    const o = e.target.closest('[data-mode]');
+    if (!o) return;
+    closeSyncMenu();
+    const mode = o.dataset.mode;
+    if (mode === syncModeKey()) return;
+    try {
+      S.settings = await window.api.updateSettings({ view: { sync_mode: mode } });
+    } catch (err) {
+      return toastError(err);
+    }
+    const b = $('#lib-sync');
+    if (b && !S.syncing) {
+      b.title = syncMode().hint;
+      b.lastElementChild.textContent = syncMode().label;
+    }
+    toast(`Кнопка теперь: «${syncMode().label}». Выбор запомнится.`);
+  });
+  syncMenu = {
+    el,
+    onDown: (e) => {
+      if (!el.contains(e.target) && !anchor.contains(e.target)) closeSyncMenu();
+    },
+    onKey: (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        closeSyncMenu();
+      }
+    },
+  };
+  document.addEventListener('mousedown', syncMenu.onDown, true);
+  document.addEventListener('keydown', syncMenu.onKey, true);
+  window.addEventListener('resize', closeSyncMenu);
 }
 
 function renderBanners() {
@@ -122,7 +208,8 @@ const monthKey = (sec) => {
 /** Месяцы, в которых есть посты: [{ key, label, n }] от новых к старым */
 function monthList() {
   const m = new Map();
-  for (const p of S.posts) {
+  // считаем только посты, подходящие под «Чьи посты», — цифры у месяцев совпадают с тем, что будет показано
+  for (const p of byOwner(S.posts)) {
     const k = monthKey(date(p));
     m.set(k, (m.get(k) || 0) + 1);
   }
@@ -134,16 +221,48 @@ function monthList() {
     });
 }
 
+/** Фильтр «Чьи посты»: все / мои / из сообществ (все или одно) */
+function byOwner(list) {
+  if (F.owner === 'mine') {
+    const me = myOwnerId();
+    return list.filter((p) => Number(p.owner_id) === me);
+  }
+  if (F.owner === 'groups') return list.filter((p) => Number(p.owner_id) < 0 && (!F.group || String(p.owner_id) === F.group));
+  return list;
+}
+
+function ownerFilter() {
+  const me = myOwnerId();
+  const meName = personPages().find((x) => x.id === me)?.name;
+  const groups = groupPages();
+  if (F.group && !groups.some((g) => String(g.id) === F.group)) F.group = '';
+  return `<select class="select" id="f-owner" title="Чьи посты показывать">
+      <option value="all" data-icon="library" ${F.owner === 'all' ? 'selected' : ''}>Все посты</option>
+      <option value="mine" data-icon="heart" ${F.owner === 'mine' ? 'selected' : ''}>Мои${meName ? ` — ${esc(meName)}` : ''}</option>
+      <option value="groups" data-icon="users" ${F.owner === 'groups' ? 'selected' : ''}>Из сообществ</option>
+    </select>
+    ${
+      F.owner === 'groups'
+        ? `<select class="select" id="f-group" title="Какое сообщество">
+      <option value="">Все сообщества</option>
+      ${groups.map((g) => `<option value="${g.id}" ${F.group === String(g.id) ? 'selected' : ''}>${esc(g.name)} · ${num(g.n)}</option>`).join('')}
+    </select>`
+        : ''
+    }`;
+}
+
 const qPlaceholder = () => (F.qMode === 'text' ? 'Поиск по названию и тексту…' : 'Имя того, кто поставил лайк…');
 
 function toolbar() {
+  const owner = ownerFilter(); // раньше месяцев: от выбора «Чьи посты» зависят месяцы и цифры в них
   const months = monthList();
+  // выбранного месяца нет среди постов этого владельца — выбираем месяц заново по общему правилу
+  if (F.month && !months.some((m) => m.key === F.month)) F.month = null;
   // по умолчанию — текущий месяц, а если в нём нет постов — ближайший прошлый, где они есть
   if (F.month === null) {
     const now = monthKey(Date.now() / 1000);
     F.month = (months.find((m) => m.key <= now) || months[0] || { key: '' }).key;
   }
-  if (F.month && !months.some((m) => m.key === F.month)) F.month = '';
   return `
   <div class="toolbar">
     <div class="search with-mode">${icon('search')}<input class="input" id="f-q" placeholder="${qPlaceholder()}" value="${esc(F.q)}" />
@@ -152,6 +271,7 @@ function toolbar() {
         <button type="button" data-qmode="liker" class="${F.qMode === 'liker' ? 'on' : ''}" title="Искать по имени того, кто поставил лайк">${icon('heart')}<span>Лайки</span></button>
       </div>
     </div>
+    ${owner}
     <select class="select" id="f-month" title="Месяц публикации">
       <option value="">Все месяцы</option>
       ${months.map((m) => `<option value="${m.key}" ${F.month === m.key ? 'selected' : ''}>${m.label} · ${num(m.n)}</option>`).join('')}
@@ -182,6 +302,14 @@ function bindToolbar() {
       }),
   );
   $('#f-month').onchange = (e) => ((F.month = e.target.value), renderGrid());
+  $('#f-owner').onchange = (e) => {
+    F.owner = e.target.value;
+    if (F.owner === 'mine' && !myOwnerId()) toast('Не знаю, какая страница ваша. Выберите её в «Настройках» → «Моя страница».', { error: true });
+    // второй список (сообщество) появляется только при «Из сообществ» — перерисовываем панель
+    renderLibrary();
+  };
+  // сообщество меняет список месяцев и цифры в нём — перерисовываем панель
+  $('#f-group')?.addEventListener('change', (e) => ((F.group = e.target.value), renderLibrary()));
   $('#f-sort').onchange = (e) => {
     F.sort = e.target.value;
     window.api.updateSettings({ view: { sort: F.sort } }).catch(() => {});
@@ -200,6 +328,7 @@ function filtered() {
     }
   }
   if (F.month) list = list.filter((p) => monthKey(date(p)) === F.month);
+  list = byOwner(list);
   const sorters = {
     date_desc: (a, b) => date(b) - date(a),
     date_asc: (a, b) => date(a) - date(b),
@@ -232,21 +361,27 @@ export function sourceChip(p) {
   return `<button class="src-chip ${tone}" data-src title="${esc(name)} — открыть во ВКонтакте"><span class="src-ava">${esc((name.replace(/[^\p{L}\p{N}]/gu, '')[0] || '?').toUpperCase())}</span><span class="src-name">${esc(name)}</span>${icon(p.owner_id < 0 ? 'users' : 'external')}</button>`;
 }
 
+/** Сетка фото в карточке: 2 фото — рядом, 3 и больше — 2×2 (у трёх последняя клетка пустая), с 5-го — «+N» на последней */
+function photoGrid(ph) {
+  const shown = ph.slice(0, 4);
+  const more = ph.length - shown.length;
+  const cells = shown.map(
+    (x, i) =>
+      `<div class="pg-cell" data-pi="${i}"><img src="${esc(photoSrc(x))}" alt="" loading="lazy" decoding="async" data-ph="" />${
+        more > 0 && i === shown.length - 1 ? `<span class="pg-more" title="Ещё ${pl(more, 'фотография', 'фотографии', 'фотографий')}">+${more}</span>` : ''
+      }</div>`,
+  );
+  if (shown.length === 3) cells.push('<div class="pg-cell pg-empty"></div>');
+  return `<div class="photo-grid n${shown.length === 2 ? 2 : 4}">${cells.join('')}</div>`;
+}
+
 function card(p) {
   const ph = photos(p);
   const t = text(p);
   const changed = localChanges(p).length > 0;
   const el = html(`<article class="card" data-id="${esc(p.id)}">
     <div class="card-photo" data-open>
-      ${
-        ph.length > 1
-          ? `<div class="slides">${ph.map((x) => `<img src="${esc(photoSrc(x))}" alt="" loading="lazy" decoding="async" data-ph="Фото недоступно" />`).join('')}</div>
-             <button class="s-nav prev" data-s="-1" title="Предыдущее фото">${icon('chevL')}</button><button class="s-nav next" data-s="1" title="Следующее фото">${icon('chevR')}</button>
-             <div class="s-dots">${ph.map((_, i) => `<span class="${i ? '' : 'on'}"></span>`).join('')}</div>`
-          : ph[0]
-            ? `<img src="${esc(photoSrc(ph[0]))}" alt="" loading="lazy" decoding="async" data-ph="Фото недоступно" />`
-            : placeholder()
-      }
+      ${ph.length > 1 ? photoGrid(ph) : ph[0] ? `<img src="${esc(photoSrc(ph[0]))}" alt="" loading="lazy" decoding="async" data-ph="Фото недоступно" />` : placeholder()}
       <div class="card-badges">
         ${p.is_new ? `<span class="badge mint">${icon('sparkle')} Новое</span>` : ''}
         ${changed ? `<span class="badge pink" title="Есть ваши изменения">${icon('edit')} Изменено</span>` : ''}
@@ -257,7 +392,6 @@ function card(p) {
         <button class="c-act" data-edit title="Редактировать">${icon('edit')}</button>
         <button class="c-act danger" data-del title="Убрать в корзину">${icon('trash')}</button>
       </div>
-      ${ph.length > 1 ? `<span class="photo-count">${icon('image')}<b data-n>1</b>/${ph.length}</span>` : ''}
     </div>
     <div class="card-body">
       ${sourceChip(p)}
@@ -270,26 +404,11 @@ function card(p) {
       <span class="card-date" title="${esc(fmtDate(date(p), true))}">${icon('calendar')}${esc(fmtDate(date(p)))}</span>
     </div>
   </article>`);
-  // слайдер фото: стрелки листают, клик по фото открывает пост на текущем фото
-  let slide = 0;
-  const slideBy = (d) => {
-    slide = (slide + d + ph.length) % ph.length;
-    el.querySelector('.slides').style.transform = `translateX(-${slide * 100}%)`;
-    el.querySelectorAll('.s-dots span').forEach((x, i) => x.classList.toggle('on', i === slide));
-    const n = el.querySelector('[data-n]');
-    if (n) n.textContent = String(slide + 1);
-  };
-  el.querySelectorAll('[data-s]').forEach(
-    (b) =>
-      (b.onclick = (e) => {
-        e.stopPropagation();
-        slideBy(Number(b.dataset.s));
-      }),
-  );
-  // вся карточка открывает пост (кнопки внутри обрабатывают клик сами)
+  // вся карточка открывает пост (кнопки внутри обрабатывают клик сами); клик по фото в сетке — сразу на этом фото
   el.onclick = (e) => {
     if (e.target.closest('button, a')) return;
-    openPost(p.id, slide);
+    const cell = e.target.closest('[data-pi]');
+    openPost(p.id, cell ? Number(cell.dataset.pi) : 0);
   };
   const stop = (fn) => (e) => {
     e.stopPropagation();

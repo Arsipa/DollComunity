@@ -1,4 +1,5 @@
 'use strict';
+const os = require('os');
 const { app, BrowserWindow, ipcMain, dialog, protocol, shell, Menu, screen, safeStorage, nativeImage, session } = require('electron');
 const fs = require('fs');
 const fsp = fs.promises;
@@ -215,14 +216,19 @@ async function makeThumb(src, dest) {
 }
 
 // ---------- окно ----------
+// Тихий режим для проверок разработчика (скриншоты, npm run test:ui): окно не показывается, не разворачивается,
+// не попадает в панель задач и не забирает фокус — снимки делаются со скрытого окна. В собранной программе недоступно.
+const QUIET = DEV_TEST && (process.env.VKD_SHOTS || process.env.VKD_QUIET);
+
 function createWindow() {
   const area = screen.getPrimaryDisplay().workArea;
-  const saved = config.windowBounds;
+  const saved = QUIET ? null : config.windowBounds;
   const width = Math.min(1440, Math.round(area.width * 0.9));
   const height = Math.min(940, Math.round(area.height * 0.92));
   win = new BrowserWindow({
-    width: saved?.width || width,
-    height: saved?.height || height,
+    ...(QUIET ? { skipTaskbar: true, focusable: false, useContentSize: true, paintWhenInitiallyHidden: true } : {}),
+    width: QUIET ? 1536 : saved?.width || width,
+    height: QUIET ? 794 : saved?.height || height,
     x: saved?.x,
     y: saved?.y,
     minWidth: 860,
@@ -232,11 +238,14 @@ function createWindow() {
     title: APP_NAME,
     icon: path.join(SRC_DIR, 'assets', 'icon.png'),
     autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+    // скрытое окно не должно «засыпать», иначе таймеры и анимации встают и снимки не те
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false, ...(QUIET ? { backgroundThrottling: false } : {}) },
   });
   Menu.setApplicationMenu(null);
-  if (saved?.maximized || (!saved && (area.width < 1500 || area.height < 900))) win.maximize();
-  win.once('ready-to-show', () => win.show());
+  if (!QUIET) {
+    if (saved?.maximized || (!saved && (area.width < 1500 || area.height < 900))) win.maximize();
+    win.once('ready-to-show', () => win.show());
+  }
   win.loadURL('vkd://app/index.html');
   // ссылки — только во внешнем браузере
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -256,6 +265,7 @@ function createWindow() {
   win.on('resize', remember);
   win.on('move', remember);
   win.on('close', () => {
+    if (QUIET) return; // размеры тестового окна не запоминаем
     remember();
     try {
       writeConfig(config);
@@ -306,6 +316,9 @@ function runScreenshots(dir) {
         }
       }
       await wait(900);
+      // скрытое окно (тихий режим) рисует кадры лениво — просим свежий кадр перед снимком
+      win.webContents.invalidate();
+      await wait(250);
       const img = await win.webContents.capturePage();
       fs.writeFileSync(path.join(dir, `${String(i).padStart(2, '0')}_${name.trim()}.png`), img.toPNG());
     }
@@ -466,6 +479,51 @@ async function vkWebHasSessionCookie() {
   } catch (_) {
     return false;
   }
+}
+
+// ---------- «Поделиться журналом»: один файл на рабочем столе, чтобы переслать разработчику ----------
+// Ключи доступа в журнал не пишутся, но на всякий случай всё похожее на ключ вырезается.
+const scrubSecrets = (t) =>
+  t
+    .replace(/(access_token|refresh_token|id_token|token|code_verifier|client_secret|remixsid|remixnsid)(["']?\s*[:=]\s*["']?)[A-Za-z0-9._\-]{12,}/gi, '$1$2***')
+    .replace(/vk1\.a\.[A-Za-z0-9._\-]+/g, '***');
+
+async function shareLogs() {
+  const read = (f) => fsp.readFile(path.join(store.logsDir, f), 'utf8').catch(() => '');
+  const [older, current] = await Promise.all([read('app.1.log'), read('app.log')]);
+  const posts = store.get('posts.json').posts || [];
+  const users = store.get('users.json').users || {};
+  const hist = store.get('sync_history.json');
+  const web = await vkWebStatus().catch(() => ({ loggedIn: false, offline: true }));
+  const head = [
+    'VK Doll Community — журнал для разработчика',
+    `Создан: ${new Date().toISOString()}`,
+    `Версия программы: ${app.getVersion()} · Electron ${process.versions.electron} · ${os.type()} ${os.release()} (${os.arch()})`,
+    `ВКонтакте подключён: ${hasToken() ? 'да' : 'нет'} · вход на vk.com: ${web.loggedIn ? 'да' : web.offline ? 'не проверить' : 'нет'}`,
+    `Постов: ${posts.length} · людей: ${Object.keys(users).length} · последнее обновление: ${hist && hist.last_sync ? new Date(hist.last_sync).toISOString() : 'не было'}`,
+    `Папка данных: ${store.root}`,
+    '',
+    '================ журнал ================',
+    '',
+  ].join('\n');
+  // журнал ротируется на 1 МБ — берём предыдущий кусок и текущий, но не больше ~3 МБ
+  let body = older + current;
+  if (body.length > 3e6) body = '…(начало обрезано)…\n' + body.slice(-3e6);
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const name = `VK Doll — журнал ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}-${pad(d.getMinutes())}.txt`;
+  let dir;
+  try {
+    dir = app.getPath('desktop');
+    await fsp.access(dir);
+  } catch (_) {
+    dir = app.getPath('downloads');
+  }
+  const file = path.join(dir, name);
+  await fsp.writeFile(file, '\ufeff' + head + scrubSecrets(body), 'utf8');
+  if (!QUIET) shell.showItemInFolder(file); // в тихом режиме проверок Проводник не открываем
+  log('info', `Журнал сохранён для отправки: ${file}`);
+  return { file, name, dir };
 }
 
 async function vkWebStatus() {
@@ -839,6 +897,7 @@ function registerIpc() {
     }
   });
   h('logs:open', () => shell.openPath(store.logsDir));
+  h('logs:share', () => shareLogs());
 }
 
 app.whenReady().then(() => {

@@ -1,4 +1,4 @@
-// Люди: панель «кто лайкнул», карточка пользователя, раздел «Пользователи».
+// Люди: панель «кто лайкнул» и карточка участника (рейтинг участников — в stats.js).
 import { S, photos, text, date, likersOf } from './state.js';
 import { icon, esc, $, html, num, pl, fmtDate, fmtMs, photoSrc, avatar, userName, drawer, debounce, incremental } from './util.js';
 import { openPost } from './post.js';

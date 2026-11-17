@@ -1,5 +1,5 @@
 // Настройки: ВКонтакте, хранение, журнал, о программе.
-import { S, reload } from './state.js';
+import { S, reload, personPages, myOwnerId } from './state.js';
 import { startTour } from './tour.js';
 import { icon, esc, $, $$, bytes, pl, toast, toastError, confirmDialog, modal } from './util.js';
 import { emptyTrash } from './trash.js';
@@ -51,6 +51,26 @@ function renderWebStatus(st) {
     if (!ok) return;
     renderWebStatus(await window.api.vkWebLogout().catch(() => ({ loggedIn: false })));
   });
+}
+
+// ---- «Моя страница»: чьи посты показывает фильтр «Мои» в «Моих постах» ----
+function myPagePanel() {
+  const pages = personPages();
+  const me = myOwnerId();
+  const acc = S.account?.info;
+  if (acc && acc.id > 0 && !pages.some((x) => x.id === acc.id)) pages.push({ id: acc.id, name: acc.name, n: 0 });
+  return `<div class="panel" id="p-mypage">
+    <div class="panel-title">${icon('heart')} Моя страница</div>
+    <p class="panel-sub">Посты с этой страницы показываются в фильтре «Мои» на экране «Мои посты».</p>
+    ${
+      pages.length
+        ? `<select class="select" id="my-page" style="min-width:260px">
+        ${me && !pages.some((x) => x.id === me) ? `<option value="${me}" selected>Страница id${me}</option>` : ''}
+        ${pages.map((x) => `<option value="${x.id}" ${x.id === me ? 'selected' : ''}>${esc(x.name)}${x.n ? ` · ${pl(x.n, 'пост', 'поста', 'постов')}` : ''}</option>`).join('')}
+      </select>`
+        : '<span class="hint">Добавьте хотя бы один пост со своей страницы — и её можно будет выбрать здесь.</span>'
+    }
+  </div>`;
 }
 
 function bindLikesPanel() {
@@ -124,6 +144,7 @@ export function renderSettings() {
           }
         </div>
         ${likesPanel(acc)}
+        ${myPagePanel()}
       </div>
       <div class="col">
         <div class="panel">
@@ -145,13 +166,21 @@ export function renderSettings() {
         <div class="panel">
           <div class="panel-title">${icon('info')} О программе</div>
           <dl class="kv"><dt>Версия</dt><dd>${esc(S.version)}</dd><dt>Обновления</dt><dd>Чтобы обновить программу, запустите установщик новой версии — библиотека сохранится.</dd><dt>Приватность</dt><dd>Данные хранятся только на этом компьютере. Программа обращается только к ВКонтакте.</dd></dl>
-          <div class="row" style="margin-top:14px"><button class="btn" id="show-log">${icon('doc')} Журнал событий</button><button class="btn ghost" id="restart-tour">${icon('sparkle')} Пройти обучение</button></div>
+          <div class="row" style="margin-top:14px"><button class="btn primary" id="share-log" title="Сохранить журнал одним файлом на рабочий стол, чтобы отправить разработчику">${icon('external')} Поделиться журналом</button><button class="btn" id="show-log">${icon('doc')} Журнал событий</button><button class="btn ghost" id="restart-tour">${icon('sparkle')} Пройти обучение</button></div>
         </div>
       </div>
     </div>`;
 
   $$('[data-url]', el).forEach((a) => (a.onclick = (e) => (e.preventDefault(), window.api.openUrl(a.dataset.url))));
   bindLikesPanel();
+  $('#my-page')?.addEventListener('change', async (e) => {
+    try {
+      S.settings = await window.api.updateSettings({ view: { my_owner_id: Number(e.target.value) } });
+      toast('Сохранено. Фильтр «Мои» теперь показывает посты с этой страницы.');
+    } catch (err) {
+      toastError(err);
+    }
+  });
   // ---- очистка ----
   $('#clean-posts').onclick = async () => {
     const n = S.posts.length;
@@ -251,4 +280,27 @@ export function renderSettings() {
     lb.scrollTop = lb.scrollHeight;
   };
   $('#restart-tour').onclick = () => startTour();
+  $('#share-log').onclick = async (e) => {
+    const btn = e.currentTarget;
+    const ok = await confirmDialog({
+      title: 'Поделиться журналом?',
+      text: 'На <b>рабочий стол</b> добавится текстовый файл (.txt) с журналом работы программы, и откроется папка с ним. Этот файл можно переслать разработчику, чтобы он разобрался с ошибкой. Паролей и ключей доступа в нём нет.',
+      ok: 'Сохранить файл',
+    });
+    if (!ok) return;
+    btn.disabled = true;
+    try {
+      const r = await window.api.shareLogs();
+      modal({
+        title: 'Журнал сохранён',
+        body: `<div class="notice mint">${icon('check')}<div>Файл <b>${esc(r.name)}</b> сохранён в папку <b>${esc(r.dir)}</b> — она уже открыта.</div></div>
+          <p style="margin-bottom:0">Отправьте этот файл разработчику: перетащите его в окно Telegram, WhatsApp или в письмо. Паролей и ключей доступа в файле нет.</p>`,
+        foot: '<button class="btn primary" data-close>Понятно</button>',
+      });
+    } catch (err) {
+      toastError(err);
+    } finally {
+      btn.disabled = false;
+    }
+  };
 }

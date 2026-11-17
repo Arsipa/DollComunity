@@ -62,4 +62,5 @@ contextBridge.exposeInMainWorld('api', {
   changeLocation: call('lib:change-location'),
   readLogs: call('logs:read'),
   openLogs: call('logs:open'),
+  shareLogs: call('logs:share'),
 });
